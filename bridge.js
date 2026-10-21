@@ -158,8 +158,11 @@ if(command==='status') {
   // change the value Cursor holds -- re-reading is enough, and a reload costs no
   // unsaved work. CURSOR_BRIDGE_RESTART_CURSOR=1 restores the old kill for
   // anyone who prefers it.
+  // Defaults to on: Cursor reads http.proxy once at startup, so after an update
+  // it keeps dialing the old address until it is restarted. Opting out is the
+  // deliberate choice; the reload is the normal path.
   function reloadCursor() {
-    if (process.env.CURSOR_BRIDGE_RESTART_CURSOR !== '1') return;
+    if (process.env.CURSOR_BRIDGE_RESTART_CURSOR === '0') return;
     try {
       if (process.platform === 'win32') {
         const killer=spawn('taskkill',['/F','/T','/IM','Cursor.exe'],{stdio:'ignore',windowsHide:true});

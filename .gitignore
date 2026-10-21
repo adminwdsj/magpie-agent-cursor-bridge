@@ -6,3 +6,6 @@ VERIFICATION.txt
 SHA256SUMS
 # Scratch tree install tests create where the OS temp dir is unusable.
 .bridge-tmp-*/
+
+# Windows engine removed: this fork ships macOS arm64 only.
+bin/cursor-magpie-bridge.exe
