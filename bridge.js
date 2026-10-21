@@ -41,9 +41,6 @@ const status=(state,extra={},{force=false}={})=>{
 };
 const read=name=>JSON.parse(fs.readFileSync(file(name),'utf8'));
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
-// Cheap identity for the engine on disk: size + mtime. A plugin update swaps the
-// binary under a running supervisor, and only a stamp change tells it to reload.
-const engineStampNow=()=>{try{const s=fs.statSync(engineBinary);return `${s.size}:${s.mtimeMs}`;}catch{return null;}};
 const command=process.argv[2]||'status';
 if(command==='status') {
   console.log(fs.existsSync(file('status.json'))?fs.readFileSync(file('status.json'),'utf8'):'未安装或尚未运行');
@@ -59,7 +56,12 @@ if(command==='status') {
   // Declared before the first call: ensureWatch() reads these, and a `let` that
   // is still in its temporal dead zone throws instead of reading undefined.
   let watchSpawnedAt=0;
-  let child=null,ready=null,ending=false,lastConfig='',nextRefresh=0,paused=false,lastModels=0,pausedRetries=0,magpieGate=null,engineStamp=null;
+  let child=null,ready=null,ending=false,lastConfig='',nextRefresh=0,paused=false,lastModels=0,pausedRetries=0,magpieGate=null,engineSig='';
+  // Size:mtime of the engine binary the current child was started from. An
+  // update that rewrites the binary in place changes this; the loop then swaps
+  // to it, but only while the relay has no live connection (see below). If the
+  // release is immutable this never changes and no swap is ever attempted.
+  const engineSignature=()=>{try{const s=fs.statSync(engineBinary);return `${s.size}:${s.mtimeMs}`;}catch{return '';}};
   // Windows has no service manager here: a hidden process that is killed does
   // not come back on its own, and Cursor is left dialing a closed port.
   ensureWatch();
@@ -108,9 +110,6 @@ if(command==='status') {
       env:{...process.env,CURSOR_BYOK_DATA_DIR:file('data')},stdio:['pipe','pipe','pipe'],windowsHide:true
     });
     child=engine;
-    // Record what this run launched, so the loop can tell when a plugin update
-    // has replaced the file underneath it.
-    engineStamp=engineStampNow();
     // Native diagnostics can contain request information; never forward them into public logs.
     // Local-only tee: keeps the original public-log contract, but lets us diagnose
     // engine-side failures (e.g. protocol rejections that never reach runs/llm_calls).
@@ -131,6 +130,9 @@ if(command==='status') {
       engine.once('exit',(code,signal)=>{clearTimeout(timer);reject(new Error(`bridge engine exited before ready (${signal||code})`));});
     });
     await publishProxy(ready.proxy);
+    // Record which engine build this child is: a later in-place update changes
+    // the signature and the loop swaps to it when idle.
+    engineSig=engineSignature();
     // A fresh address has to reach Cursor, which caches the value it read.
     allowCursorRestart();
     ensureCursorReadsNewProxy(true);
@@ -164,11 +166,8 @@ if(command==='status') {
   // change the value Cursor holds -- re-reading is enough, and a reload costs no
   // unsaved work. CURSOR_BRIDGE_RESTART_CURSOR=1 restores the old kill for
   // anyone who prefers it.
-  // Defaults to on: Cursor reads http.proxy once at startup, so after an update
-  // it keeps dialing the old address until it is restarted. Opting out is the
-  // deliberate choice; the reload is the normal path.
   function reloadCursor() {
-    if (process.env.CURSOR_BRIDGE_RESTART_CURSOR === '0') return;
+    if (process.env.CURSOR_BRIDGE_RESTART_CURSOR !== '1') return;
     try {
       if (process.platform === 'win32') {
         const killer=spawn('taskkill',['/F','/T','/IM','Cursor.exe'],{stdio:'ignore',windowsHide:true});
@@ -265,20 +264,21 @@ if(command==='status') {
         }
         else {
           const changed=raw!==lastConfig;
-          // An update replaces the engine on disk while this supervisor keeps
-          // running the old build, so the patched version never takes effect
-          // until someone restarts it by hand. Watch the file it launched.
-          if(engineStamp!==null && engineStamp!==engineStampNow()) {
-            engineStamp=null;
-            await stop();
-          }
-          if(changed || Date.now()>=nextRefresh || !child || child.exitCode!==null || child.signalCode!==null) {
+          // A staged update rewrote the engine binary and the relay is idle: the
+          // one moment a swap cannot cut a request. Never swap while a connection
+          // is live -- that abrupt stop mid-run is what corrupted a conversation
+          // and forced a DB repair. If nothing reads active() (no relay yet) or
+          // the signature is unchanged, upgradeReady stays false.
+          const upgradeReady=child && child.exitCode===null && child.signalCode===null
+            && engineSig && engineSignature()!==engineSig
+            && relay && relay.server.active && relay.server.active()===0;
+          if(changed || Date.now()>=nextRefresh || !child || child.exitCode!==null || child.signalCode!==null || upgradeReady) {
             const effective=await gatewayModels(c);
             // The gateway answers in tens of milliseconds, so a longer period
             // only delayed a model added in Magpie; Cursor re-reads the catalog
             // on its own schedule and needs the new entries to be there.
             nextRefresh=Date.now()+4000;
-            if(!child || child.exitCode!==null || child.signalCode!==null) {
+            if(!child || child.exitCode!==null || child.signalCode!==null || upgradeReady) {
               await stop();await start(effective);
             } else atomic(file('effective.json'),JSON.stringify(effective));
             lastConfig=raw;paused=false;lastModels=effective.models.length;pausedRetries=0;
