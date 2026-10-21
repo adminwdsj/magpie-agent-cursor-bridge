@@ -41,6 +41,9 @@ const status=(state,extra={},{force=false}={})=>{
 };
 const read=name=>JSON.parse(fs.readFileSync(file(name),'utf8'));
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
+// Cheap identity for the engine on disk: size + mtime. A plugin update swaps the
+// binary under a running supervisor, and only a stamp change tells it to reload.
+const engineStampNow=()=>{try{const s=fs.statSync(engineBinary);return `${s.size}:${s.mtimeMs}`;}catch{return null;}};
 const command=process.argv[2]||'status';
 if(command==='status') {
   console.log(fs.existsSync(file('status.json'))?fs.readFileSync(file('status.json'),'utf8'):'未安装或尚未运行');
@@ -56,7 +59,7 @@ if(command==='status') {
   // Declared before the first call: ensureWatch() reads these, and a `let` that
   // is still in its temporal dead zone throws instead of reading undefined.
   let watchSpawnedAt=0;
-  let child=null,ready=null,ending=false,lastConfig='',nextRefresh=0,paused=false,lastModels=0,pausedRetries=0,magpieGate=null;
+  let child=null,ready=null,ending=false,lastConfig='',nextRefresh=0,paused=false,lastModels=0,pausedRetries=0,magpieGate=null,engineStamp=null;
   // Windows has no service manager here: a hidden process that is killed does
   // not come back on its own, and Cursor is left dialing a closed port.
   ensureWatch();
@@ -105,6 +108,9 @@ if(command==='status') {
       env:{...process.env,CURSOR_BYOK_DATA_DIR:file('data')},stdio:['pipe','pipe','pipe'],windowsHide:true
     });
     child=engine;
+    // Record what this run launched, so the loop can tell when a plugin update
+    // has replaced the file underneath it.
+    engineStamp=engineStampNow();
     // Native diagnostics can contain request information; never forward them into public logs.
     // Local-only tee: keeps the original public-log contract, but lets us diagnose
     // engine-side failures (e.g. protocol rejections that never reach runs/llm_calls).
@@ -259,6 +265,13 @@ if(command==='status') {
         }
         else {
           const changed=raw!==lastConfig;
+          // An update replaces the engine on disk while this supervisor keeps
+          // running the old build, so the patched version never takes effect
+          // until someone restarts it by hand. Watch the file it launched.
+          if(engineStamp!==null && engineStamp!==engineStampNow()) {
+            engineStamp=null;
+            await stop();
+          }
           if(changed || Date.now()>=nextRefresh || !child || child.exitCode!==null || child.signalCode!==null) {
             const effective=await gatewayModels(c);
             // The gateway answers in tens of milliseconds, so a longer period
