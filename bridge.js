@@ -106,7 +106,13 @@ if(command==='status') {
     });
     child=engine;
     // Native diagnostics can contain request information; never forward them into public logs.
-    engine.stderr.resume();
+    // Local-only tee: keeps the original public-log contract, but lets us diagnose
+    // engine-side failures (e.g. protocol rejections that never reach runs/llm_calls).
+    try {
+      const diag=fs.createWriteStream(file('engine-stderr.log'),{flags:'a',mode:0o600});
+      engine.stderr.on('data',chunk=>{try{diag.write(chunk);}catch{}});
+      engine.stderr.on('end',()=>{try{diag.end();}catch{}});
+    } catch { engine.stderr.resume(); }
     ready=await new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>reject(new Error('bridge startup timed out')),30000);
       const lines=createInterface({input:engine.stdout});
