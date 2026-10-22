@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.2
+
+Harden message hydration against a non-UTF8 `payload_json`. An older engine once
+wrote raw bytes where a user `message_id` belonged, leaving one row whose JSON is
+not valid UTF-8; `messages.rs` read it with `row.get::<&str>` which **panics** on
+bad bytes, taking down the worker thread (the stray `messages.rs:101` panic seen
+in long conversations).
+
+### Fixed
+
+- Hydrate reads `payload_json` with `try_get`, so a non-UTF8 row fails that one
+  request with a decode error instead of panicking the worker. The affected
+  conversation's live lineage keeps working; only a turn that actually touches the
+  bad row errors, recoverably. No data is deleted — the clean engine never writes
+  such rows, this just stops the old scars from crashing anything.
+
 ## 0.3.1
 
 Front subagents work. When the agent spawns a subagent with `run_in_background`

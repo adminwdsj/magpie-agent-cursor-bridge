@@ -584,6 +584,25 @@ index 7c50336..0bf45f1 100644
      pub async fn proxy_port(&self) -> Option<u16> {
          self.inner.proxy.lock().await.port()
      }
+diff --git a/server/src/store/messages.rs b/server/src/store/messages.rs
+index c738ae6..5ca4f14 100644
+--- a/server/src/store/messages.rs
++++ b/server/src/store/messages.rs
+@@ -98,7 +98,13 @@ impl Store {
+         .fetch_all(&mut **tx)
+         .await?;
+         rows.into_iter()
+-            .map(|row| serde_json::from_str(row.get::<&str, _>(0)).map_err(Into::into))
++            // try_get returns a decode error instead of panicking when a stored
++            // payload_json holds non-UTF8 bytes (a scar left by an older engine).
++            // One such row then fails its request gracefully, not the worker.
++            .map(|row| -> Result<CanonicalMessage> {
++                let payload: &str = row.try_get(0)?;
++                Ok(serde_json::from_str(payload)?)
++            })
+             .collect()
+     }
+ }
 diff --git a/server/src/store/models.rs b/server/src/store/models.rs
 index 6d29d3c..f47ac3e 100644
 --- a/server/src/store/models.rs
