@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.1
+
+Front subagents work. When the agent spawns a subagent with `run_in_background`
+false or absent, Cursor sends the turn without a `message_id`, and upstream
+`compile::run::action` rejected it with `Cursor user message action has no
+message_id` — so only background subagents (`run_in_background: true`) ran.
+
+### Fixed
+
+- A subagent turn with an empty `message_id` now gets a deterministic synthetic
+  id (`synthetic-subagent:<digest of kind + text>`) and compiles through the
+  **normal** path — unlike the old binary patch, which skipped the compile path
+  and corrupted checkpoints. The id is derived from the subagent kind and text,
+  so retries stay idempotent; the subagent runs in its own `conversation_id` and
+  never pollutes the parent. A non-subagent empty `message_id` is still rejected.
+  Covered by unit tests in `server/src/cursor/compile/run.rs`.
+
 ## 0.3.0
 
 The engine is now built from source instead of shipped as a prebuilt binary. The

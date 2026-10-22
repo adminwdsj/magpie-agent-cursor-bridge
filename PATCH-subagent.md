@@ -1,57 +1,67 @@
-# 前台 Subagent 支持（跟踪中的后续项，开源构建尚未包含）
+# 前台 Subagent 支持（0.3.1 已在源码层修复）
 
 ## 现状
 
-0.3.0 的开源引擎**不包含**任何 subagent 补丁，`compile::run::action` 保持上游原样。
+0.3.1 起,前台和后台 subagent 都能用。修复在源码里,随引擎一起编译,不碰二进制。
 
-- **后台 subagent**（`run_in_background: true`）：正常工作。
-- **前台 subagent**（`run_in_background` 缺失 / `false`）：返回上游错误
-  `Cursor user message action has no message_id`。这是上游刻意的设计，不是 BUG。
+- **前台 subagent**（`run_in_background` 缺失 / `false`）：✅ 正常。
+- **后台 subagent**（`run_in_background: true`）：✅ 正常（本来就行）。
 
-需要派 subagent 时请用后台 subagent。
+## 问题
 
-## 为什么移除了旧的二进制补丁
-
-0.2.x 的闭源引擎带过一个二进制补丁，把
+Cursor 派前台 subagent 时,发来的 action 不带 `message_id`,上游
+`compile::run::action` 直接拒绝:
 
 ```
-0x10076f348  cbz x8, 0x10076f738   (0xb4001f88)
-         ->  b     0x10076f780     (0x1400010e)
+[invalid_argument] Cursor user message action has no message_id
 ```
 
-本意是让空 `message_id` 落到“降级路径”。但对照开源源码
-（`server/src/cursor/compile/run.rs` 的 `action()`）发现：`0x10076f348` 对应的
-`cbz` 是**正常用户消息处理块的入口判断**，不是单纯的空值校验。跳过它会让**每一条**
-用户消息都绕过正常编译路径，直接进只处理单字段的 stub。
+证据（`bridge.db` 的 `tool_round_calls`,11 次 Task 调用）:
 
-后果就是长会话里出现 1–2 条消息的畸形 checkpoint、`FOREIGN KEY constraint failed`
-(787) 和 “stable history shrank from N to M roots” 一连串错误。所以这个补丁是
-checkpoint 损坏的**根因**，开源构建里彻底不带它。
+| `run_in_background` | 结果 |
+|---|---|
+| 缺失 / `false` | 失败 7 次,0 成功 |
+| `true` | 成功 5 次,0 失败 |
 
-## 要在源码层正确支持前台 subagent（后续）
+## 修法（源码,`server/src/cursor/compile/run.rs`）
 
-正确做法不是跳过校验，而是在 `action()` 的 `UserMessageAction` 分支里，当
-`user.message_id.is_empty()` 时**合成**一个确定性 id，再走正常路径：
+在 `action()` 的 `UserMessageAction` 分支里,当 `message_id` 为空**且**这是一个
+subagent 请求（`request.subagent_type_name` 有值）时,用「subagent 类型 + 文本」合成
+一个确定性 id,再**照常走正常编译路径**:
 
 ```rust
-// server/src/cursor/compile/run.rs，UserMessageAction 分支
-let message_id = if user.message_id.is_empty() {
-    // 前台 subagent 不带 message_id：用内容 + nonce 合成稳定 id，
-    // input_id 仍是 cursor:user:<id>，正常锚定、正常构造 runtime event。
-    format!("synthetic:{}", blob_id_of(&user.text, &action_context))
-} else {
-    user.message_id.clone()
-};
+let mut user = user.clone();
+if user.message_id.is_empty() {
+    let Some(kind) = request.subagent_type_name.as_deref() else {
+        return Err(Error::Protocol(
+            "Cursor user message action has no message_id".into(),
+        ));
+    };
+    user.message_id = format!(
+        "synthetic-subagent:{}",
+        BlobId::digest(format!("{kind}\0{}", user.text).as_bytes()).to_base64()
+    );
+}
 ```
 
-- subagent 会话 `conversation_id` 独立于父，不污染父上下文。
-- 合成 id 必须确定（同一内容同一 id），避免重复提交生成多个锚点。
-- 改完要在本机真实跑一次前台 subagent + 一次长会话回归，确认不再出现 787 / shrank。
+要点:
 
-落在 `source.patch` 里，和桥接 bin 一起从源码编译，不再碰二进制。
+- **和当年那个二进制补丁相反**。旧补丁把 `cbz` 改成 `b`,跳过了整个正常处理块,导致
+  每条用户消息都走只处理单字段的 stub —— 这才是 checkpoint 畸形（787 外键、stable
+  history shrank）的根因。本修法不跳任何东西,只补一个合法 id,后续 checkpoint/roots
+  逻辑和普通消息一模一样地跑。
+- **确定性**:同一 subagent 类型 + 同一文本 → 同一 id,重试幂等,不会生成多个锚点。
+- **隔离**:subagent 用自己的 `conversation_id`,不污染父上下文。
+- **非 subagent 的空 id 仍然报错**（真·协议错不被掩盖）。
+
+## 验证
+
+- 单测:`server/src/cursor/compile/run.rs` 的 `tests`（合成/拒绝/保留三例），
+  随 `cargo test -p cursor-server --lib` 跑,163 passed。
+- 端到端:在 Cursor 里让 agent 派一个前台 subagent,应正常返回子 agent 结果。
 
 ## 范围
 
 - 仅 macOS arm64。Windows 的 `cursor-magpie-bridge.exe` 本仓不维护。
-- 基于 leookun/cursor-byok（engine 自报 `0.2.1`）。上游换引擎后按源码重新定位即可，
+- 基于 leookun/cursor-byok（engine 自报 `0.2.1`）。改在源码,随上游换引擎自动跟随,
   不再依赖二进制偏移。
