@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0
+
+The engine is now built from source instead of shipped as a prebuilt binary. The
+bin is `cursor-magpie-bridge` compiled from leookun/cursor-byok (MIT) plus
+`source.patch`, which adds the headless bridge entry (`server/src/bin/
+cursor-magpie-bridge.rs`): it reads `effective.json`, catalogues the Magpie models
+against a loopback-only gateway, runs the proxy over the already-trusted CA, and
+emits the same `ready` event the supervisor consumes. The JS layer, config
+contract, CA path, and data dir are unchanged, so this is a drop-in swap that
+reuses the existing trusted CA with no re-trust.
+
+### Fixed
+
+- Dropped the front-subagent binary patch that earlier builds carried. That patch
+  rerouted every user message past the engine's normal compile path, which
+  produced the 1–2 message checkpoints and the `FOREIGN KEY constraint failed`
+  (787) / "stable history shrank" errors seen in long conversations. The source
+  build ships upstream `compile::run::action` unchanged: conversations compile
+  correctly. A **front** subagent (`run_in_background` false/absent) still returns
+  the upstream `Cursor user message action has no message_id`; use a background
+  subagent (`run_in_background: true`). Re-adding front-subagent support at source
+  level is a tracked follow-up, see `PATCH-subagent.md`.
+
 ## 0.2.7
 
 A toggle restarted Cursor to make it re-read `http.proxy`, which cost every open
