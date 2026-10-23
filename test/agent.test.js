@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {runInNewContext} from 'node:vm';
 import {agent, connect} from '../agent.js';
 
 const source = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'agent.js');
 
 test('turning the agent on returns the Magpie connection', () => {
+  const previous = process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART;
   process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART = '1';
   try {
     const result = connect({
@@ -23,8 +25,21 @@ test('turning the agent on returns the Magpie connection', () => {
       {id: 'x', name: 'x', context: null},
     ]);
   } finally {
-    delete process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART;
+    if (previous === undefined) delete process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART;
+    else process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART = previous;
   }
+});
+
+test('the autostart opt-out is checked before any asynchronous work is queued', () => {
+  const text = fs.readFileSync(source, 'utf8');
+  const startBody = text.slice(text.indexOf('function start()'), text.indexOf('// connect() must answer'));
+  let queued = false;
+  runInNewContext(`${startBody}\nstart()`, {
+    process: {env: {MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART: '1'}},
+    Promise: {resolve: () => ({then: () => {queued = true; return {catch() {}};}})},
+    report() {},
+  });
+  assert.equal(queued, false, 'connect must not queue a startup after its caller restores env');
 });
 
 test('the agent module loads with no built-in available at import time', () => {
@@ -146,6 +161,7 @@ test('an engine that exits before ready is not reported as a certificate problem
 });
 
 test('connect() answers immediately instead of blocking on startup', () => {
+  const previous = process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART;
   process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART = '1';
   try {
     const started = Date.now();
@@ -157,7 +173,8 @@ test('connect() answers immediately instead of blocking on startup', () => {
     assert.ok(Date.now() - started < 1000, 'connect must not wait for the bridge');
     assert.equal(result.enabled, true);
   } finally {
-    delete process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART;
+    if (previous === undefined) delete process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART;
+    else process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART = previous;
   }
 });
 

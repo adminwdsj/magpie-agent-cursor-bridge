@@ -25,8 +25,10 @@ export function connect({ gateway, model, models }) {
 }
 
 function start() {
+  // Capture the opt-out before returning to the caller; tests may restore env
+  // before the asynchronous startup callback runs.
+  if (process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART) return;
   Promise.resolve().then(async () => {
-    if (process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART) return;
     const fs = await import('node:fs');
     const os = await import('node:os');
     const path = await import('node:path');

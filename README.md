@@ -2,13 +2,13 @@
 
 让 Cursor 编辑器直接使用 Magpie 中配置的全部模型与路由组。模型菜单返回 Magpie 模型目录，隐藏 Cursor 默认 Auto 入口，保留 Cursor 原有登录。
 
-当前版本全面支持 **Windows (x64)** 与 **Apple Silicon / Intel macOS**。
+此维护分支当前发布 **0.3.4，仅随包提供 Apple Silicon macOS 引擎**；Windows / Intel macOS 暂无对应发布产物。
 
 ---
 
 ## 特性
 
-- **全平台支持**：针对 Windows 与 macOS 深度适配原生协议桥接核心，开箱即用。
+- **可追溯的源码构建**：原生引擎基于 cursor-byok，源码补丁、构建脚本和校验值随包提供。
 - **动态模型同步**：在 Magpie 中添加、切换或分组的模型，每 15 秒自动热同步至 Cursor 模型列表。
 - **无感代理接管**：连接时自动配置 Cursor 代理，断开连接或卸载时完整自动还原 Cursor 原有配置。
 - **安全与隐私**：所有 TLS 证书与回环代理均在本机生成，网络流量仅流经本机回环地址（`127.0.0.1`）至 Magpie 网关，不接触任何外部中转服务。
@@ -19,7 +19,7 @@
 
 在 Magpie → **Plugins** 添加仓库地址安装：
 ```text
-github:932633145/magpie-agent-cursor-bridge
+github:adminwdsj/magpie-agent-cursor-bridge
 ```
 
 ---
@@ -32,7 +32,7 @@ github:932633145/magpie-agent-cursor-bridge
 
 ---
 
-### Windows 系统使用步骤
+### Windows 系统使用步骤（上游历史说明，本分支当前不提供 Windows 引擎）
 
 1. **运行初始化**：
    在插件目录下打开 PowerShell 执行初始化脚本（或直接双击运行 `setup.cmd`）：
