@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.3
+
+Stop long opus replies from being truncated. Responses were cut mid-stream with
+`finish_reason=length`, failing the run with "model stopped before completing the
+response", because the request never carried an output cap and the gateway's low
+default applied.
+
+### Fixed
+
+- `configure()` now propagates a model's configured output cap to the request
+  (`model.max_output_tokens`); it previously set display name / context / reasoning
+  but dropped the token cap, so `openai_chat` sent no `max_completion_tokens` and
+  the gateway truncated. This was an upstream gap — no DB or config value could
+  reach the request without it.
+- The bridge catalogues each model's real `max_output_tokens` from the gateway
+  `/models` response (captured in `gatewayModels`), clamped to 64000 to stay well
+  inside the context window. So opus gets a generous cap and smaller models keep
+  their own limit, instead of every model inheriting the gateway's low default.
+
 ## 0.3.2
 
 Harden message hydration against a non-UTF8 `payload_json`. An older engine once

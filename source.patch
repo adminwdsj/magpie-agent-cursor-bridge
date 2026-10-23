@@ -54,10 +54,10 @@ index 0000000..9590ae9
 +}
 diff --git a/server/src/bin/cursor-magpie-bridge.rs b/server/src/bin/cursor-magpie-bridge.rs
 new file mode 100644
-index 0000000..2a625b6
+index 0000000..29b7fc2
 --- /dev/null
 +++ b/server/src/bin/cursor-magpie-bridge.rs
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,151 @@
 +//! Headless Cursor protocol bridge. No desktop/account writes or management API.
 +use std::{path::PathBuf, sync::Arc, time::Duration};
 +use cursor_server::{api, config, cursor::{prompting::{PromptAssets, PromptCompiler}, transport::TransportRegistry}, local_app::CursorHarness, model::ModelConfigInput, network::NetworkClients, plugin::{PluginRegistry, PluginRuntime}, provider::ProviderRouter, search::WebCache, store::Store};
@@ -68,7 +68,7 @@ index 0000000..2a625b6
 +#[derive(Deserialize)]
 +struct Connection { gateway: String, key: String, model: String, models: Vec<BridgeModel> }
 +#[derive(Deserialize)]
-+struct BridgeModel { id: String, #[serde(default)] name: String, context: Option<u64> }
++struct BridgeModel { id: String, #[serde(default)] name: String, context: Option<u64>, #[serde(default, rename = "maxOutput")] max_output: Option<u64> }
 +
 +fn catalogue(bytes: &[u8]) -> Result<Vec<ModelConfigInput>, Box<dyn std::error::Error>> {
 +    let c: Connection = serde_json::from_slice(bytes)?;
@@ -87,6 +87,7 @@ index 0000000..2a625b6
 +            "group_name":"Magpie", "type":"openai", "base_url": c.gateway.trim_end_matches('/'),
 +            "api_key":c.key, "tooltip_data":format!("Magpie / {}",m.id), "model_id":m.id,
 +            "context_window_tokens":m.context.filter(|v| *v > 0),
++            "max_completion_tokens": m.max_output.map(|v| v.min(64000)).filter(|v| *v > 0),
 +            "custom_headers_enabled":true, "custom_headers":{"User-Agent":"cursor-magpie-bridge/0.2.1"}
 +        }))?)
 +    }).collect()
@@ -175,7 +176,7 @@ index 0000000..2a625b6
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
-+    fn config() -> serde_json::Value { json!({"gateway":"http://127.0.0.1:3425/v1","key":"test-only","model":"p/b","models":[{"id":"p/a","name":"A","context":200000},{"id":"p/b","name":"B"}]}) }
++    fn config() -> serde_json::Value { json!({"gateway":"http://127.0.0.1:3425/v1","key":"test-only","model":"p/b","models":[{"id":"p/a","name":"A","context":200000,"maxOutput":128000},{"id":"p/b","name":"B","maxOutput":8000}]}) }
 +    #[test]
 +    fn selected_model_first_and_route_preserved() {
 +        let models=catalogue(&serde_json::to_vec(&config()).unwrap()).unwrap();
@@ -183,6 +184,9 @@ index 0000000..2a625b6
 +        assert_eq!(models[1].context_window_tokens,Some(200000));
 +        assert_eq!(models[0].base_url,"http://127.0.0.1:3425/v1");
 +        assert_eq!(models[0].api_key,"test-only");
++        // Output cap passes through; a model above the ceiling is clamped to 64000.
++        assert_eq!(models[0].max_completion_tokens,Some(8000));
++        assert_eq!(models[1].max_completion_tokens,Some(64000));
 +    }
 +    #[test]
 +    fn rejects_remote_and_duplicate_models() {
@@ -584,6 +588,23 @@ index 7c50336..0bf45f1 100644
      pub async fn proxy_port(&self) -> Option<u16> {
          self.inner.proxy.lock().await.port()
      }
+diff --git a/server/src/model/configuration.rs b/server/src/model/configuration.rs
+index 1fe7111..6b54a94 100644
+--- a/server/src/model/configuration.rs
++++ b/server/src/model/configuration.rs
+@@ -196,6 +196,12 @@ impl ModelConfig {
+         if model.context_window_tokens.is_none() {
+             model.context_window_tokens = self.context_window_tokens;
+         }
++        // Propagate the configured output cap to the request model; without this
++        // the per-model max_completion_tokens never reaches openai_chat, so the
++        // gateway's low default truncates long replies (finish_reason=length).
++        if model.max_output_tokens.is_none() {
++            model.max_output_tokens = self.max_output_tokens();
++        }
+         if model.reasoning.effort.is_none() {
+             model.reasoning.effort = match self.model_type {
+                 ModelType::OpenAi => self.reasoning_effort.clone(),
 diff --git a/server/src/store/messages.rs b/server/src/store/messages.rs
 index c738ae6..5ca4f14 100644
 --- a/server/src/store/messages.rs
