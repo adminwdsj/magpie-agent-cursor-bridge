@@ -138,12 +138,18 @@ test('a scratch home never writes the Startup entry of the real profile',t=>{
 
 test('complete staging never overwrites an existing running release',t=>{
  const p=paths(temp(t));const fakeRuntime=path.join(p.home,'runtime');fs.writeFileSync(fakeRuntime,'test');
- const one=stage(source,p,version,fakeRuntime),two=stage(source,p,version,fakeRuntime);
+ const runtimeSource=isWin?fakeRuntime:process.execPath;
+ const one=stage(source,p,version,runtimeSource),two=stage(source,p,version,runtimeSource);
  assert.notEqual(one,two);assert.equal(hash(path.join(one,binName)),hash(engine));
  assert.ok(fs.existsSync(path.join(two,'node_modules/jsonc-parser/package.json')));
  const runtimeFile = path.join(two, isWin ? 'bin/runtime.exe' : 'bin/runtime');
  assert.ok(fs.existsSync(runtimeFile));
- if (!isWin) assert.equal(fs.statSync(runtimeFile).mode&0o777,0o755);
+ if (!isWin) {
+   assert.equal(fs.statSync(runtimeFile).mode&0o777,0o755);
+   if (spawnSync('/usr/bin/otool',['-L',runtimeFile],{encoding:'utf8'}).stdout.includes('@rpath/libnode.127.dylib')) {
+     assert.ok(fs.existsSync(path.join(two,'bin/libnode.127.dylib')));
+   }
+ }
 });
 
 test('failed activation restores previous launch configuration and restarts previous release',{timeout:15000},async t=>{

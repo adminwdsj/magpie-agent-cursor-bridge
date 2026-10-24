@@ -2,7 +2,7 @@
 
 让 Cursor 编辑器直接使用 Magpie 中配置的全部模型与路由组。模型菜单返回 Magpie 模型目录，隐藏 Cursor 默认 Auto 入口，保留 Cursor 原有登录。
 
-此维护分支当前发布 **0.3.5，仅随包提供 Apple Silicon macOS 引擎**；Windows / Intel macOS 暂无对应发布产物。
+此维护分支当前发布 **0.3.6，仅随包提供 Apple Silicon macOS 引擎**；Windows / Intel macOS 暂无对应发布产物。
 
 ---
 

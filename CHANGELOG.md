@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.6
+
+修复安装器未把 Node 运行时依赖的 `libnode.127.dylib` 一起放入发布目录，导致 launchd 启动桥接时出现 `OS_REASON_DYLD` 并反复崩溃。
+
+- 发布目录现在根据 `otool -L` 自动复制 `@rpath` 动态库，launchd 不再依赖开发机的 Homebrew 路径。
+- 验证：插件全量测试 70 项通过，并覆盖运行时动态库随 release staging 复制。
+
 ## 0.3.5
 
 修复上游 413 请求体超限被桥错误编码成 `unavailable` 的问题：这类确定性拒绝现在标为不可重试并立即显示，避免 Cursor 对同一 52.9 MB 请求重复重试；502/超时仍保留可重试。
