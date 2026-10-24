@@ -1,6 +1,6 @@
 {
   "name": "magpie-agent-cursor-bridge",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "type": "module",
   "description": "Magpie Cursor 协议桥，当前提供 Apple Silicon macOS 引擎",
   "license": "MIT",

@@ -236,6 +236,7 @@ index d2a9810..18bacc6 100644
      #[cfg(unix)]
      fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))?;
 diff --git a/server/src/cursor/compile/run.rs b/server/src/cursor/compile/run.rs
+index b3712ce..e040e72 100644
 --- a/server/src/cursor/compile/run.rs
 +++ b/server/src/cursor/compile/run.rs
 @@ -179,9 +179,18 @@ pub(crate) async fn prepare(
@@ -353,6 +354,75 @@ diff --git a/server/src/cursor/compile/run.rs b/server/src/cursor/compile/run.rs
 +        assert_eq!(projection.input_id.unwrap(), "cursor:user:abc123");
 +    }
 +}
+diff --git a/server/src/cursor/conversation/output.rs b/server/src/cursor/conversation/output.rs
+index 55dd9b6..9738466 100644
+--- a/server/src/cursor/conversation/output.rs
++++ b/server/src/cursor/conversation/output.rs
+@@ -1005,6 +1005,14 @@ fn cursor_error(failure: RunFailure) -> Error {
+     }
+ }
+
++fn provider_error_is_retryable(error: &Error) -> bool {
++    match error {
++        Error::Provider(message) => !crate::run::is_rejected_request(message),
++        Error::Http(_) => true,
++        _ => false,
++    }
++}
++
+ fn accept_tool_completion(
+     delivery: CommandResult,
+     request_id: &str,
+@@ -1046,20 +1054,30 @@ pub(crate) fn finish_failed(handle: &TransportHandle, error: &Error) -> Result<(
+     };
+     let stream_error = match error {
+         Error::Provider(_) | Error::Http(_) => {
++            let retryable = provider_error_is_retryable(error);
+             let detail = ai::ErrorDetails {
+                 error: ai::error_details::Error::ProviderError as i32,
+                 details: Some(ai::CustomErrorDetails {
+-                    title: "Provider Error".into(),
++                    title: if retryable {
++                        "Provider Error"
++                    } else {
++                        "Provider Request Rejected"
++                    }
++                    .into(),
+                     detail: error.to_string(),
+                     allow_command_links_potentially_unsafe_please_only_use_for_handwritten_trusted_markdown: Some(true),
+-                    is_retryable: Some(true),
++                    is_retryable: Some(retryable),
+                     show_request_id: Some(true),
+-                    should_show_immediate_error: Some(false),
++                    should_show_immediate_error: Some(!retryable),
+                 }),
+                 is_expected: Some(true),
+             };
+             ConnectStreamError {
+-                code: ConnectCode::Unavailable,
++                code: if retryable {
++                    ConnectCode::Unavailable
++                } else {
++                    ConnectCode::InvalidArgument
++                },
+                 message: error.to_string(),
+                 details: vec![ConnectErrorDetail {
+                     type_name: "aiserver.v1.ErrorDetails".into(),
+@@ -1136,4 +1154,14 @@ mod tests {
+             Err(Error::RunNotFound(request_id)) if request_id == "request"
+         ));
+     }
++
++    #[test]
++    fn rejected_provider_requests_are_not_retryable_in_cursor_details() {
++        assert!(!super::provider_error_is_retryable(&Error::Provider(
++            "OpenAI Responses 413 Payload Too Large: request_too_large".into(),
++        )));
++        assert!(super::provider_error_is_retryable(&Error::Provider(
++            "OpenAI Responses 502 Bad Gateway: upstream unavailable".into(),
++        )));
++    }
+ }
 diff --git a/server/src/cursor/services/model_catalog.rs b/server/src/cursor/services/model_catalog.rs
 index b9dbd08..209b430 100644
 --- a/server/src/cursor/services/model_catalog.rs
@@ -625,6 +695,29 @@ index 1fe7111..6b54a94 100644
          if model.reasoning.effort.is_none() {
              model.reasoning.effort = match self.model_type {
                  ModelType::OpenAi => self.reasoning_effort.clone(),
+diff --git a/server/src/run/mod.rs b/server/src/run/mod.rs
+index 7cf0157..ac23ac4 100644
+--- a/server/src/run/mod.rs
++++ b/server/src/run/mod.rs
+@@ -17,4 +17,5 @@ pub use engine::*;
+ pub use event::*;
+ pub use handle::*;
+ pub use model_cycle::*;
++pub(crate) use model_cycle::is_rejected_request;
+ pub use port::*;
+diff --git a/server/src/run/model_cycle.rs b/server/src/run/model_cycle.rs
+index 469dc5f..6d8d5b2 100644
+--- a/server/src/run/model_cycle.rs
++++ b/server/src/run/model_cycle.rs
+@@ -393,7 +393,7 @@ fn failure(
+ /// needs to see. Provider failures are formatted as `<label> <status>: <body>`,
+ /// so only the head before the body is inspected. 408 and 425 are timing
+ /// failures and stay retryable.
+-fn is_rejected_request(message: &str) -> bool {
++pub(crate) fn is_rejected_request(message: &str) -> bool {
+     let head = message.split_once(": ").map_or(message, |(head, _)| head);
+     head.split_whitespace().any(|token| {
+         token.len() == 3
 diff --git a/server/src/store/messages.rs b/server/src/store/messages.rs
 index c738ae6..5ca4f14 100644
 --- a/server/src/store/messages.rs
@@ -679,6 +772,7 @@ index 6d29d3c..f47ac3e 100644
              format!("SELECT {MODEL_COLUMNS} FROM model_configs ORDER BY sort_order, display_name");
 diff --git a/server/tests/lodestar_replay_repro.rs b/server/tests/lodestar_replay_repro.rs
 new file mode 100644
+index 0000000..d2c265f
 --- /dev/null
 +++ b/server/tests/lodestar_replay_repro.rs
 @@ -0,0 +1,206 @@
