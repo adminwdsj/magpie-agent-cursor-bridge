@@ -2,7 +2,15 @@
 
 让 Cursor 编辑器直接使用 Magpie 中配置的全部模型与路由组。模型菜单返回 Magpie 模型目录，隐藏 Cursor 默认 Auto 入口，保留 Cursor 原有登录。
 
-当前发布 **0.3.12，仅随包提供 Apple Silicon macOS 引擎**；Windows / Intel macOS 暂无对应发布产物。
+当前发布 **0.3.13，仅随包提供 Apple Silicon macOS 引擎**；Windows / Intel macOS 暂无对应发布产物。
+
+> **社区插件，未上架 Magpie 插件市场。** 安装前请先了解下面两点风险，自行决定是否使用。
+
+## 使用前必读
+
+- **会安装一个受信任的根证书。** 本插件要截获 Cursor 与其后端（`*.cursor.sh`）之间的 HTTPS 流量，才能把模型请求转给 Magpie，所以初始化时会在本机生成名为 `Cursor BYOK Local CA` 的根证书（有效期约 10 年），并加入当前用户登录钥匙串的受信任根证书。私钥保存在 `~/.config/magpie-cursor-bridge/data/ca/`，能读取该文件的程序可以冒充任意 HTTPS 网站。
+- **卸载会删除这张证书和私钥**（0.3.13 起）。请用 `bash setup.command uninstall` 卸载；只在 Magpie 插件页移除插件**不会**执行卸载，证书会留下，此时请先运行卸载命令，或在「钥匙串访问」里手动删除 `Cursor BYOK Local CA`。
+- **Cursor 账号风险。** 桥接会在本地应答 Cursor 的部分接口（账号、套餐、用量等），这类做法违反 Cursor 的使用条款，存在被停用账号的风险。
 
 **和市场里其他 Cursor 插件的区别**
 
@@ -22,7 +30,7 @@
 
 ### 安装方式
 
-在 Magpie → **Plugins** 搜索 **Magpie-Cursor-Relay** 安装，或在终端执行：
+本插件不在 Magpie 插件市场，请在终端执行：
 ```text
 magpie plugin add magpie-cursor-relay
 ```
@@ -82,7 +90,7 @@ magpie plugin add magpie-cursor-relay
 | :--- | :--- | :--- |
 | **启动/更新服务** | `powershell -ExecutionPolicy Bypass -File setup.ps1` | `bash setup.command` |
 | **查看后台运行状态** | `powershell -ExecutionPolicy Bypass -File setup.ps1 status` | `bash setup.command status` |
-| **停用并卸载后台服务** | `powershell -ExecutionPolicy Bypass -File setup.ps1 uninstall` | `bash setup.command uninstall` |
+| **停用并卸载（含删除根证书）** | `powershell -ExecutionPolicy Bypass -File setup.ps1 uninstall` | `bash setup.command uninstall` |
 
 - **断开连接**：在 Magpie 的 Agents 页面选择 Disconnect，或在终端执行 `magpie cursor-bridge default`。
 - **代理自愈与还原**：当桥接服务退出或在 Magpie 中断开连接时，Cursor 的代理配置会自动恢复为初始状态。

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {atomic,restoreProxy} from './lib/settings.js';
-import {paths,run,verifyPackage,initializeCertificate,stage,activate,stopJob,label} from './lib/install.js';
+import {paths,run,verifyPackage,initializeCertificate,removeCertificate,stage,activate,stopJob,label} from './lib/install.js';
 const source=path.dirname(fileURLToPath(import.meta.url));
 const manifest=JSON.parse(fs.readFileSync(path.join(source,'package.json'),'utf8'));
 const command=process.argv[2]||'setup';
@@ -73,7 +73,10 @@ try {
         if(magpie) run(magpie,['plugin','rm',p.target],{optional:true});
         if(p.plist && fs.existsSync(p.plist)) fs.unlinkSync(p.plist);
         if(p.startupScript && fs.existsSync(p.startupScript)) fs.unlinkSync(p.startupScript);
-        console.log('后台已卸载，Cursor 代理已还原。若从 Magpie 插件页安装，请同时移除该插件。证书、数据及恢复记录保留。');
+        const ca=removeCertificate(p);
+        console.log(ca.removed
+          ? '后台已卸载，Cursor 代理已还原，本机根证书及其私钥已删除。若从 Magpie 插件页安装，请同时移除该插件。会话数据保留。'
+          : `后台已卸载，Cursor 代理已还原，证书私钥已删除；钥匙串里的证书未能删除（SHA-1 ${ca.sha1}），请在「钥匙串访问」里手动删除 Cursor BYOK Local CA。`);
       } else {
         verifyPackage(source);
         const isWin = process.platform === 'win32';

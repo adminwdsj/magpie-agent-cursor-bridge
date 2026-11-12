@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {createHash} from 'node:crypto';
-import {paths,verifyPackage,initializeCertificate,stage,activate,plistText,label} from '../lib/install.js';
+import {paths,verifyPackage,initializeCertificate,removeCertificate,stage,activate,plistText,label} from '../lib/install.js';
 
 const isWin = process.platform === 'win32';
 const source=fileURLToPath(new URL('..',import.meta.url));
@@ -185,4 +185,22 @@ test('GitHub installation supports a dependency hoisted by Magpie Bun',t=>{
  const runtime=path.join(home,'runtime');fs.writeFileSync(runtime,'test');
  const release=stage(plugin,paths(home),version,runtime);
  assert.ok(fs.existsSync(path.join(release,'node_modules/jsonc-parser/package.json')));
+});
+
+test('uninstall removes exactly our CA from the keychain and deletes its private key',t=>{
+  if(isWin) return;
+  const home=temp(t);const p=paths(home);const dir=path.join(p.root,'data/ca');
+  fs.mkdirSync(dir,{recursive:true});
+  const der=Buffer.from('fake certificate body');
+  fs.writeFileSync(path.join(dir,'ca.crt'),`-----BEGIN CERTIFICATE-----\n${der.toString('base64')}\n-----END CERTIFICATE-----\n`);
+  fs.writeFileSync(path.join(dir,'ca.key'),'secret');
+  const sha1=createHash('sha1').update(der).digest('hex').toUpperCase();
+  for(const stillThere of [false,true]) {
+    fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'ca.crt'),`-----BEGIN CERTIFICATE-----\n${der.toString('base64')}\n-----END CERTIFICATE-----\n`);
+    const calls=[];
+    const out=removeCertificate(p,(cmd,args)=>{calls.push(args);return {status:0,stdout:args[0]==='find-certificate'&&stillThere?`SHA-1 hash: ${sha1}`:''};});
+    assert.ok(calls.some(a=>a[0]==='delete-certificate'&&a[2]===sha1));
+    assert.equal(out.removed,!stillThere);
+    assert.equal(fs.existsSync(dir),false);
+  }
 });
