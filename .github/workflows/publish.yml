@@ -1,0 +1,28 @@
+# 推送 v* 标签即发布到 npm。使用 npm 受信任发布（GitHub OIDC），不需要令牌或验证码；
+# 一次性前提：npmjs.com 上 magpie-cursor-relay 的 Trusted Publisher 指向本仓库的 publish.yml。
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # 受信任发布需要 npm 11.5.1 以上
+      - run: npm install -g npm@latest
+      - name: 标签必须与 package.json 版本一致
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "标签 $GITHUB_REF_NAME 与版本 $version 不一致"; exit 1; }
+      - run: npm publish --access public
