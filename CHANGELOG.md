@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.8
+
+适配 Cursor checkpoint 消息中 `{"__type":"Uint8Array","hex":"..."}` 格式的图片载荷，修复含图会话续聊报 `Cursor message is missing image` 的问题。
+
+## 0.3.7
+
+适配 Cursor 3.29.9 协议变更，修复更新后对话报错或挂起的问题。
+
+- `BidiAppend` 解码同时兼容 `data_binary`（tag 4 二进制字节）与旧版 `data`（tag 1 hex）。
+- `BootstrapStatsig` 强制关闭 `nal_websocket_client` 与 `run_inference_websocket_client`，并将 `/agent/v1/run` 加入本地代理路由，防止 WebSocket 直连绕过本地桥。
+- 验证：服务端 166 项单测、插件 70 项单测及 `data_binary` 端到端冒烟均通过。
+
 ## 0.3.6
 
 修复安装器未把 Node 运行时依赖的 `libnode.127.dylib` 一起放入发布目录，导致 launchd 启动桥接时出现 `OS_REASON_DYLD` 并反复崩溃。

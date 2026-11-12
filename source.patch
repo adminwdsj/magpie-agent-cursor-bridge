@@ -1,6 +1,6 @@
 diff --git a/server/examples/magpie_smoke.rs b/server/examples/magpie_smoke.rs
 new file mode 100644
-index 0000000..9590ae9
+index 0000000..feccc36
 --- /dev/null
 +++ b/server/examples/magpie_smoke.rs
 @@ -0,0 +1,48 @@
@@ -10,7 +10,7 @@ index 0000000..9590ae9
 +use futures_util::StreamExt;
 +use std::time::Duration;
 +async fn append(client:&reqwest::Client,id:&str,seq:i64,message:pb::AgentClientMessage) -> Result<(),Box<dyn std::error::Error>> {
-+ let body=ai::BidiAppendRequest{data:hex::encode(message.encode_to_vec()),request_id:Some(ai::BidiRequestId{request_id:id.into()}),append_seqno:seq,..Default::default()};
++ let body=ai::BidiAppendRequest{data_binary:message.encode_to_vec(),request_id:Some(ai::BidiRequestId{request_id:id.into()}),append_seqno:seq,..Default::default()};
 + let r=client.post("https://api2.cursor.sh/aiserver.v1.BidiService/BidiAppend").header("Content-Type","application/proto").body(body.encode_to_vec()).send().await?;
 + if !r.status().is_success(){return Err(format!("append {}: {}",r.status(),r.text().await?).into());} Ok(())
 +}
@@ -52,6 +52,40 @@ index 0000000..9590ae9
 + }
 + Err("stream closed before successful end".into())
 +}
+diff --git a/server/src/api/cursor/bidi.rs b/server/src/api/cursor/bidi.rs
+index f069981..cbb0590 100644
+--- a/server/src/api/cursor/bidi.rs
++++ b/server/src/api/cursor/bidi.rs
+@@ -160,18 +160,20 @@ pub fn decode(request: &ai::BidiAppendRequest) -> Result<DecodedAppend> {
+         .map(|id| id.request_id.as_str())
+         .filter(|id| !id.is_empty())
+         .ok_or_else(|| Error::Protocol("BidiAppend request_id is required".into()))?;
+-    if !request.data_binary.is_empty() {
+-        return Err(Error::Protocol(
+-            "BidiAppend data_binary is not part of the captured protocol".into(),
+-        ));
+-    }
+-    if request.data.is_empty() {
++    // Cursor 3.29 places the AgentClientMessage in `data_binary` (tag 4) when
++    // its `bidi_append_binary_encoding_disabled` gate is off, and only older
++    // builds used the hex `data` (tag 1). Both carry the same protobuf payload,
++    // so accept either instead of rejecting the newer wire format.
++    let payload = if !request.data_binary.is_empty() {
++        request.data_binary.clone()
++    } else if !request.data.is_empty() {
++        hex::decode(&request.data)
++            .map_err(|error| Error::Protocol(format!("invalid BidiAppend hex: {error}")))?
++    } else {
+         return Err(Error::Protocol(
+             "BidiAppend contains no AgentClientMessage".into(),
+         ));
+-    }
+-    let payload = hex::decode(&request.data)
+-        .map_err(|error| Error::Protocol(format!("invalid BidiAppend hex: {error}")))?;
++    };
+     Ok(DecodedAppend {
+         request_id: request_id.into(),
+         seqno: request.append_seqno,
 diff --git a/server/src/bin/cursor-magpie-bridge.rs b/server/src/bin/cursor-magpie-bridge.rs
 new file mode 100644
 index 0000000..29b7fc2
@@ -235,6 +269,84 @@ index d2a9810..18bacc6 100644
      fs::create_dir_all(&data_dir)?;
      #[cfg(unix)]
      fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))?;
+diff --git a/server/src/cursor/checkpoint/messages/decode.rs b/server/src/cursor/checkpoint/messages/decode.rs
+index a601212..d8fa69a 100644
+--- a/server/src/cursor/checkpoint/messages/decode.rs
++++ b/server/src/cursor/checkpoint/messages/decode.rs
+@@ -148,12 +148,10 @@ fn decode_text(value: &Value) -> Result<MessageContent> {
+             }),
+             Some("image") => {
+                 let mime_type = required_string(part, "mimeType")?;
+-                let encoded = required_string(part, "image")?;
++                let data = decode_image_bytes(part)?;
+                 Ok(ContentPart::Image {
+                     mime_type: mime_type.into(),
+-                    data: STANDARD.decode(encoded).map_err(|error| {
+-                        Error::Protocol(format!("invalid Cursor image base64: {error}"))
+-                    })?,
++                    data,
+                 })
+             }
+             Some(kind) => Err(Error::Protocol(format!(
+@@ -251,6 +249,22 @@ fn decode_tool_result(value: &Value) -> Result<ToolResultContent> {
+     })
+ }
+ 
++fn decode_image_bytes(part: &Value) -> Result<Vec<u8>> {
++    let image = part
++        .get("image")
++        .ok_or_else(|| Error::Protocol("Cursor message is missing image".into()))?;
++    if let Some(encoded) = image.as_str() {
++        return STANDARD
++            .decode(encoded)
++            .map_err(|error| Error::Protocol(format!("invalid Cursor image base64: {error}")));
++    }
++    if let Some(hex_str) = image.get("hex").and_then(Value::as_str) {
++        return hex::decode(hex_str)
++            .map_err(|error| Error::Protocol(format!("invalid Cursor image hex: {error}")));
++    }
++    Err(Error::Protocol("Cursor message is missing image".into()))
++}
++
+ fn required_string<'a>(value: &'a Value, name: &str) -> Result<&'a str> {
+     value
+         .get(name)
+diff --git a/server/src/cursor/checkpoint/messages/tests.rs b/server/src/cursor/checkpoint/messages/tests.rs
+index 663f292..28fcec0 100644
+--- a/server/src/cursor/checkpoint/messages/tests.rs
++++ b/server/src/cursor/checkpoint/messages/tests.rs
+@@ -189,6 +189,31 @@ fn cursor_user_image_uses_image_field() {
+     assert!(encoded["content"][1].get("data").is_none());
+ }
+ 
++#[test]
++fn cursor_user_image_accepts_uint8array_hex_envelope() {
++    let wire = json!({
++        "role": "user",
++        "id": "user-image-hex",
++        "content": [
++            {"type":"text", "text":"look"},
++            {"type":"image", "image":{"__type":"Uint8Array", "hex":"010203"}, "mimeType":"image/jpeg"},
++        ],
++    });
++    let message = decode(
++        serde_json::to_vec(&wire).unwrap().as_slice(),
++        "cursor-root:user-image-hex".into(),
++    )
++    .unwrap();
++    assert!(matches!(
++        &message.content,
++        MessageContent::Parts { parts }
++            if parts[1] == ContentPart::Image {
++                mime_type: "image/jpeg".into(),
++                data: vec![1, 2, 3],
++            }
++    ));
++}
++
+ #[test]
+ fn repeated_cursor_wire_ids_do_not_merge_distinct_tool_rounds() {
+     fn assistant(call_id: &str, internal_id: &str) -> CanonicalMessage {
 diff --git a/server/src/cursor/compile/run.rs b/server/src/cursor/compile/run.rs
 index b3712ce..e040e72 100644
 --- a/server/src/cursor/compile/run.rs
@@ -361,7 +473,7 @@ index 55dd9b6..9738466 100644
 @@ -1005,6 +1005,14 @@ fn cursor_error(failure: RunFailure) -> Error {
      }
  }
-
+ 
 +fn provider_error_is_retryable(error: &Error) -> bool {
 +    match error {
 +        Error::Provider(message) => !crate::run::is_rejected_request(message),
@@ -423,6 +535,124 @@ index 55dd9b6..9738466 100644
 +        )));
 +    }
  }
+diff --git a/server/src/cursor/services/analytics.rs b/server/src/cursor/services/analytics.rs
+index 80103d1..1274de0 100644
+--- a/server/src/cursor/services/analytics.rs
++++ b/server/src/cursor/services/analytics.rs
+@@ -14,6 +14,8 @@ use crate::{api::cursor::proxy, Error, Result};
+ 
+ pub const BOOTSTRAP_STATSIG_PATH: &str = "/aiserver.v1.AnalyticsService/BootstrapStatsig";
+ const AGENT_RETRIES_GATE: &str = "nal_agent_retries";
++const AGENT_WEBSOCKET_GATE: &str = "nal_websocket_client";
++const RUN_INFERENCE_WEBSOCKET_CONFIG: &str = "run_inference_websocket_client";
+ const LOCAL_RULE: &str = "local_enabled";
+ 
+ #[derive(Clone, PartialEq, Message)]
+@@ -52,6 +54,7 @@ fn patch_upstream(response: proxy::BufferedResponse) -> Result<Response<Body>> {
+     let mut message = BootstrapStatsigResponse::decode(payload)?;
+     let mut config = serde_json::from_str::<Value>(&message.config)?;
+     enable_agent_retries(&mut config)?;
++    disable_agent_websocket_transports(&mut config)?;
+     message.config = serde_json::to_string(&config)?;
+     Ok(response.with_body(encode_unary(&message, framed)))
+ }
+@@ -75,6 +78,7 @@ fn local_response() -> Result<Response<Body>> {
+         "time": generated_at_ms
+     });
+     enable_agent_retries(&mut config)?;
++    disable_agent_websocket_transports(&mut config)?;
+     let message = BootstrapStatsigResponse {
+         config: serde_json::to_string(&config)?,
+         generated_at_ms,
+@@ -106,7 +110,38 @@ fn enable_agent_retries(config: &mut Value) -> Result<()> {
+         .or_insert_with(|| Value::Object(Map::new()))
+         .as_object_mut()
+         .ok_or_else(|| Error::Protocol("Statsig feature_gates must be an object".into()))?;
+-    gates.insert(gate_key.clone(), enabled_gate(&gate_key));
++    gates.insert(gate_key.clone(), enabled_gate(&gate_key, true));
++    Ok(())
++}
++
++/// Cursor 3.29 can carry Agent Run traffic over `wss://api2.cursor.sh/agent/v1/run`
++/// (`nal_websocket_client`) and RunInference over its own socket
++/// (`run_inference_websocket_client`). Both dial Cursor directly and skip the
++/// local proxy that owns the bridge, so a run started that way never reaches the
++/// model catalogue and hangs until the client gives up. Turning the two gates
++/// off keeps Agent traffic on the HTTP transports the bridge implements.
++fn disable_agent_websocket_transports(config: &mut Value) -> Result<()> {
++    let gate_key = statsig_key(config, AGENT_WEBSOCKET_GATE);
++    let config_key = statsig_key(config, RUN_INFERENCE_WEBSOCKET_CONFIG);
++    let root = config
++        .as_object_mut()
++        .ok_or_else(|| Error::Protocol("Statsig bootstrap config must be an object".into()))?;
++    let gates = root
++        .entry("feature_gates")
++        .or_insert_with(|| Value::Object(Map::new()))
++        .as_object_mut()
++        .ok_or_else(|| Error::Protocol("Statsig feature_gates must be an object".into()))?;
++    gates.insert(gate_key.clone(), enabled_gate(&gate_key, false));
++    // RunInference reads its dynamic config's `enabled` instead of a gate.
++    let configs = root
++        .entry("dynamic_configs")
++        .or_insert_with(|| Value::Object(Map::new()))
++        .as_object_mut()
++        .ok_or_else(|| Error::Protocol("Statsig dynamic_configs must be an object".into()))?;
++    configs.insert(
++        config_key,
++        json!({ "enabled": false, "treatment_percent": 0, "maxConnections": 1, "fallbackOnColdPool": false }),
++    );
+     Ok(())
+ }
+ 
+@@ -127,10 +162,10 @@ fn djb2(value: &str) -> String {
+         .to_string()
+ }
+ 
+-fn enabled_gate(name: &str) -> Value {
++fn enabled_gate(name: &str, value: bool) -> Value {
+     json!({
+         "name": name,
+-        "value": true,
++        "value": value,
+         "rule_id": LOCAL_RULE,
+         "ruleID": LOCAL_RULE,
+         "group_name": LOCAL_RULE,
+@@ -174,3 +209,35 @@ fn encode_unary(message: &impl Message, framed: bool) -> Bytes {
+     output.extend_from_slice(&payload);
+     output.freeze()
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn patched() -> Value {
++        let mut config = json!({
++            "feature_gates": {},
++            "dynamic_configs": {},
++            "hash_used": "none"
++        });
++        enable_agent_retries(&mut config).unwrap();
++        disable_agent_websocket_transports(&mut config).unwrap();
++        config
++    }
++
++    #[test]
++    fn disables_every_socket_path_that_bypasses_the_bridge() {
++        let config = patched();
++        assert_eq!(config["feature_gates"][AGENT_RETRIES_GATE]["value"], json!(true));
++        assert_eq!(config["feature_gates"][AGENT_WEBSOCKET_GATE]["value"], json!(false));
++        assert_eq!(config["dynamic_configs"][RUN_INFERENCE_WEBSOCKET_CONFIG]["enabled"], json!(false));
++    }
++
++    #[test]
++    fn honours_a_hashed_gate_key_scheme() {
++        let mut config = json!({ "feature_gates": {}, "dynamic_configs": {}, "hash_used": "djb2" });
++        disable_agent_websocket_transports(&mut config).unwrap();
++        assert_eq!(config["feature_gates"][djb2(AGENT_WEBSOCKET_GATE)]["value"], json!(false));
++        assert_eq!(config["dynamic_configs"][djb2(RUN_INFERENCE_WEBSOCKET_CONFIG)]["enabled"], json!(false));
++    }
++}
 diff --git a/server/src/cursor/services/model_catalog.rs b/server/src/cursor/services/model_catalog.rs
 index b9dbd08..209b430 100644
 --- a/server/src/cursor/services/model_catalog.rs
@@ -678,6 +908,20 @@ index 7c50336..0bf45f1 100644
      pub async fn proxy_port(&self) -> Option<u16> {
          self.inner.proxy.lock().await.port()
      }
+diff --git a/server/src/local_app/proxy.rs b/server/src/local_app/proxy.rs
+index fda8ce0..d3ec8c0 100644
+--- a/server/src/local_app/proxy.rs
++++ b/server/src/local_app/proxy.rs
+@@ -157,7 +157,8 @@ pub fn is_cursor_host(host: &str) -> bool {
+ fn is_local_path(path: &str) -> bool {
+     matches!(
+         path,
+-        "/agent.v1.AgentService/RunSSE"
++        "/agent/v1/run"
++            | "/agent.v1.AgentService/RunSSE"
+             | "/aiserver.v1.BidiService/BidiAppend"
+             | "/aiserver.v1.AiService/AvailableDocs"
+             | "/aiserver.v1.DashboardService/GetEffectiveUserPlugins"
 diff --git a/server/src/model/configuration.rs b/server/src/model/configuration.rs
 index 1fe7111..6b54a94 100644
 --- a/server/src/model/configuration.rs
