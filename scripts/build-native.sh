@@ -17,7 +17,7 @@ git -C "$bridge_build/source" apply "$bridge_package/source.patch"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo test --manifest-path "$bridge_build/source/Cargo.toml" --release --locked -p cursor-server --test lodestar_replay_repro
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --manifest-path "$bridge_build/source/Cargo.toml" --release --locked -p cursor-server --bin cursor-magpie-bridge
 mkdir -p "$bridge_package/bin"
-cp "$bridge_build/source/target/release/cursor-magpie-bridge" "$bridge_package/bin/cursor-magpie-bridge.new"
+cp "${CARGO_TARGET_DIR:-$bridge_build/source/target}/release/cursor-magpie-bridge" "$bridge_package/bin/cursor-magpie-bridge.new"
 chmod 755 "$bridge_package/bin/cursor-magpie-bridge.new"
 codesign --force --sign - "$bridge_package/bin/cursor-magpie-bridge.new"
 mv "$bridge_package/bin/cursor-magpie-bridge.new" "$bridge_package/bin/cursor-magpie-bridge"

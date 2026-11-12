@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.12
+
+Cursor 模型菜单只显示 Magpie 里的模型名，不再在后面拼接 ` · provider/model` 完整 ID；完整 ID 仍在悬停提示里（`Magpie / <id>`）。
+
+- 引擎显示名由「名字 · ID」改为「名字」，引擎重新构建，`integrity.json` 校验值已更新。引擎内部模型编号由显示名参与计算，升级后 Cursor 里已选的模型可能需要重新选一次。
+- `scripts/build-native.sh` 尊重 `CARGO_TARGET_DIR`，可复用编译缓存。
+- 验证：引擎单测 3 项（新增显示名断言）、Lodestar 回归 3 项、插件测试 72 项通过。
+
 ## 0.3.11
 
 修复 `magpie cursor-bridge <模型>` 命令行连接报 `ReferenceError: process is not defined`：Magpie 命令行在没有 `process` 的沙箱里执行插件的 `connect()`，自动启动检查现在先判断 `process` 是否存在，连接配置照常写出，由已在运行的后台桥接自行接管。
