@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.11
+
+修复 `magpie cursor-bridge <模型>` 命令行连接报 `ReferenceError: process is not defined`：Magpie 命令行在没有 `process` 的沙箱里执行插件的 `connect()`，自动启动检查现在先判断 `process` 是否存在，连接配置照常写出，由已在运行的后台桥接自行接管。
+
+- 验证：插件测试 72 项通过，新增无 `process` 沙箱的连接回归测试（修复前失败）。
+
 ## 0.3.10
 
 改名 **Magpie-Cursor-Relay**（npm 包 `magpie-cursor-relay`），准备上架 Magpie 插件市场，与同名上游 `magpie-agent-cursor-bridge` 区分。Agent ID 仍是 `cursor-bridge`，已有连接与设置不受影响。

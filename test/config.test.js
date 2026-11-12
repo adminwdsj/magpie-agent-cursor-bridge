@@ -24,3 +24,10 @@ test('model names follow live Magpie names, then snapshot, then bare model id',a
 test('disconnected configuration is inactive',()=>{assert.equal(validate({}),null);assert.equal(validate({...c,enabled:false}),null);});
 test('refuses remote gateway and credential-bearing URL',()=>{for(const gateway of ['https://evil.example/v1','http://127.0.0.1.evil.example','http://key@127.0.0.1','file:///tmp/test'])assert.throws(()=>validate({...c,gateway}));});
 test('selected model must exist and IDs must be unique',()=>{assert.throws(()=>validate({...c,model:'missing'}));assert.throws(()=>validate({...c,models:[...c.models,...c.models]}));});
+test('connect answers in a sandbox without process',()=>{
+  const real=globalThis.process;
+  let out;
+  try { globalThis.process=undefined; out=connect({gateway:{v1:c.gateway,key:c.key},models:c.models}); }
+  finally { globalThis.process=real; }
+  assert.equal(out.enabled,true);assert.equal(out.models[0].id,c.model);
+});

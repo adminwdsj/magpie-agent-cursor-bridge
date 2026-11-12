@@ -27,7 +27,9 @@ export function connect({ gateway, model, models }) {
 function start() {
   // Capture the opt-out before returning to the caller; tests may restore env
   // before the asynchronous startup callback runs.
-  if (process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART) return;
+  // Magpie's CLI runs connect() in a sandbox with no `process`; the running
+  // supervisor picks the new connection.json up on its own there.
+  if (typeof process === 'undefined' || process.env.MAGPIE_CURSOR_BRIDGE_NO_AUTOSTART) return;
   Promise.resolve().then(async () => {
     const fs = await import('node:fs');
     const os = await import('node:os');

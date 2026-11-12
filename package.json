@@ -1,6 +1,6 @@
 {
   "name": "magpie-cursor-relay",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "type": "module",
   "description": "Magpie-Cursor-Relay：让 Cursor 用 Magpie 的全部模型与路由组（Apple Silicon macOS）",
   "license": "MIT",
