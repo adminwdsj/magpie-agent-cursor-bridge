@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.9
+
+修复 Connect 之后在 Magpie 新增的模型在 Cursor 里显示成 `provider/model` 完整 ID 的问题。
+
+- 每次刷新模型列表都读取 Magpie `settings.json` 里的 `modelNames`，新模型和改名立即生效，无需重新 Connect。
+- 名字优先级：Magpie 当前名字 → Connect 时的快照名 → 网关返回名 → 去掉 provider 前缀的模型 ID。
+- 验证：插件全量测试 71 项通过，新增名字优先级回归测试（修复前失败）。
+
 ## 0.3.8
 
 适配 Cursor checkpoint 消息中 `{"__type":"Uint8Array","hex":"..."}` 格式的图片载荷，修复含图会话续聊报 `Cursor message is missing image` 的问题。
