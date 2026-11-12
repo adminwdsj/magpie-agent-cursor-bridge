@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.14
+
+修复 Cursor 3.29.15 起 subagent 全部失败（`protobuf decode error … invalid wire type value: 6/7`）。
+
+- 原因：Cursor 服务端以 100% 灰度打开了 `agent_host_local_loop`，subagent 改为在 Cursor 本机跑循环、只通过 `RunInference` 协议请求模型。桥把这条 `RunInferenceClientMessage` 当作 `AgentClientMessage` 解码，会话 ID 首字符 `'6'`/`'7'` 被读成非法 wire type。
+- 修法：引擎改写 `BootstrapStatsig` 下发时，把 `agent_host_local_loop` 关掉（与已关闭的两个 websocket 开关同一处），Cursor 退回桥支持的后端循环。这也是 Cursor 自身报错文案建议的做法。
+- 升级后需彻底退出并重开一次 Cursor，让它重新拉取开关。
+- 验证：引擎 analytics 单测 3 项（新增"服务端下发 true 被改为 false"回归测试）通过；在 Cursor 3.29.15 实测派 subagent 成功。
+
 ## 0.3.13
 
 卸载时删除本机根证书。此前 `setup.command uninstall` 只还原 Cursor 代理，证书和私钥都留在本机。

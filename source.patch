@@ -88,7 +88,7 @@ index f069981..cbb0590 100644
          seqno: request.append_seqno,
 diff --git a/server/src/bin/cursor-magpie-bridge.rs b/server/src/bin/cursor-magpie-bridge.rs
 new file mode 100644
-index 0000000..29b7fc2
+index 0000000..5361986
 --- /dev/null
 +++ b/server/src/bin/cursor-magpie-bridge.rs
 @@ -0,0 +1,152 @@
@@ -537,19 +537,20 @@ index 55dd9b6..9738466 100644
 +    }
  }
 diff --git a/server/src/cursor/services/analytics.rs b/server/src/cursor/services/analytics.rs
-index 80103d1..1274de0 100644
+index 80103d1..bed96bf 100644
 --- a/server/src/cursor/services/analytics.rs
 +++ b/server/src/cursor/services/analytics.rs
-@@ -14,6 +14,8 @@ use crate::{api::cursor::proxy, Error, Result};
+@@ -14,6 +14,9 @@ use crate::{api::cursor::proxy, Error, Result};
  
  pub const BOOTSTRAP_STATSIG_PATH: &str = "/aiserver.v1.AnalyticsService/BootstrapStatsig";
  const AGENT_RETRIES_GATE: &str = "nal_agent_retries";
 +const AGENT_WEBSOCKET_GATE: &str = "nal_websocket_client";
 +const RUN_INFERENCE_WEBSOCKET_CONFIG: &str = "run_inference_websocket_client";
++const AGENT_HOST_LOCAL_LOOP_GATE: &str = "agent_host_local_loop";
  const LOCAL_RULE: &str = "local_enabled";
  
  #[derive(Clone, PartialEq, Message)]
-@@ -52,6 +54,7 @@ fn patch_upstream(response: proxy::BufferedResponse) -> Result<Response<Body>> {
+@@ -52,6 +55,7 @@ fn patch_upstream(response: proxy::BufferedResponse) -> Result<Response<Body>> {
      let mut message = BootstrapStatsigResponse::decode(payload)?;
      let mut config = serde_json::from_str::<Value>(&message.config)?;
      enable_agent_retries(&mut config)?;
@@ -557,7 +558,7 @@ index 80103d1..1274de0 100644
      message.config = serde_json::to_string(&config)?;
      Ok(response.with_body(encode_unary(&message, framed)))
  }
-@@ -75,6 +78,7 @@ fn local_response() -> Result<Response<Body>> {
+@@ -75,6 +79,7 @@ fn local_response() -> Result<Response<Body>> {
          "time": generated_at_ms
      });
      enable_agent_retries(&mut config)?;
@@ -565,7 +566,7 @@ index 80103d1..1274de0 100644
      let message = BootstrapStatsigResponse {
          config: serde_json::to_string(&config)?,
          generated_at_ms,
-@@ -106,7 +110,38 @@ fn enable_agent_retries(config: &mut Value) -> Result<()> {
+@@ -106,7 +111,44 @@ fn enable_agent_retries(config: &mut Value) -> Result<()> {
          .or_insert_with(|| Value::Object(Map::new()))
          .as_object_mut()
          .ok_or_else(|| Error::Protocol("Statsig feature_gates must be an object".into()))?;
@@ -583,6 +584,7 @@ index 80103d1..1274de0 100644
 +fn disable_agent_websocket_transports(config: &mut Value) -> Result<()> {
 +    let gate_key = statsig_key(config, AGENT_WEBSOCKET_GATE);
 +    let config_key = statsig_key(config, RUN_INFERENCE_WEBSOCKET_CONFIG);
++    let local_loop_key = statsig_key(config, AGENT_HOST_LOCAL_LOOP_GATE);
 +    let root = config
 +        .as_object_mut()
 +        .ok_or_else(|| Error::Protocol("Statsig bootstrap config must be an object".into()))?;
@@ -592,6 +594,11 @@ index 80103d1..1274de0 100644
 +        .as_object_mut()
 +        .ok_or_else(|| Error::Protocol("Statsig feature_gates must be an object".into()))?;
 +    gates.insert(gate_key.clone(), enabled_gate(&gate_key, false));
++    // `agent_host_local_loop` moves the agent loop (Task subagents first) into
++    // Cursor and sends only RunInferenceClientMessage over BidiAppend, which the
++    // bridge cannot decode as AgentClientMessage. Cursor's own error text says
++    // to disable it to get the backend loop back, which the bridge implements.
++    gates.insert(local_loop_key.clone(), enabled_gate(&local_loop_key, false));
 +    // RunInference reads its dynamic config's `enabled` instead of a gate.
 +    let configs = root
 +        .entry("dynamic_configs")
@@ -605,7 +612,7 @@ index 80103d1..1274de0 100644
      Ok(())
  }
  
-@@ -127,10 +162,10 @@ fn djb2(value: &str) -> String {
+@@ -127,10 +169,10 @@ fn djb2(value: &str) -> String {
          .to_string()
  }
  
@@ -618,7 +625,7 @@ index 80103d1..1274de0 100644
          "rule_id": LOCAL_RULE,
          "ruleID": LOCAL_RULE,
          "group_name": LOCAL_RULE,
-@@ -174,3 +209,35 @@ fn encode_unary(message: &impl Message, framed: bool) -> Bytes {
+@@ -174,3 +216,50 @@ fn encode_unary(message: &impl Message, framed: bool) -> Bytes {
      output.extend_from_slice(&payload);
      output.freeze()
  }
@@ -643,7 +650,22 @@ index 80103d1..1274de0 100644
 +        let config = patched();
 +        assert_eq!(config["feature_gates"][AGENT_RETRIES_GATE]["value"], json!(true));
 +        assert_eq!(config["feature_gates"][AGENT_WEBSOCKET_GATE]["value"], json!(false));
++        assert_eq!(config["feature_gates"][AGENT_HOST_LOCAL_LOOP_GATE]["value"], json!(false));
 +        assert_eq!(config["dynamic_configs"][RUN_INFERENCE_WEBSOCKET_CONFIG]["enabled"], json!(false));
++    }
++
++    #[test]
++    fn overrides_a_server_enabled_local_loop_gate() {
++        // Captured from Cursor 3.29.15: the server rolled this gate out at 100%.
++        let key = djb2(AGENT_HOST_LOCAL_LOOP_GATE);
++        assert_eq!(key, "1967931573");
++        let mut config = json!({
++            "feature_gates": { key.clone(): { "name": key.clone(), "value": true } },
++            "dynamic_configs": {},
++            "hash_used": "djb2"
++        });
++        disable_agent_websocket_transports(&mut config).unwrap();
++        assert_eq!(config["feature_gates"][key]["value"], json!(false));
 +    }
 +
 +    #[test]

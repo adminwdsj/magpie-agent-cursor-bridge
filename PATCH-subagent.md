@@ -1,5 +1,11 @@
 # 前台 Subagent 支持（0.3.1 已在源码层修复）
 
+> **0.3.14 补充**：Cursor 3.29.15 的服务端开关 `agent_host_local_loop` 会让 subagent 改走
+> 本地循环 + `RunInference` 协议，桥无法解码（报 `invalid wire type value: 6/7`）。引擎在
+> `server/src/cursor/services/analytics.rs` 改写 Statsig 下发时把它关掉。若以后同类报错再现，
+> 先查 Cursor 本地缓存 `state.vscdb` 的 `workbench.experiments.statsigBootstrap` 里有没有新开关
+> 把 Agent 流量改到桥不认识的协议上。
+
 ## 现状
 
 0.3.1 起,前台和后台 subagent 都能用。修复在源码里,随引擎一起编译,不碰二进制。
