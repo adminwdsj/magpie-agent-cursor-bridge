@@ -96,7 +96,7 @@ try {
         }
         await activate(p,release,domain);
         atomic(path.join(p.root,'installation.json'),JSON.stringify({version:manifest.version,release,source,installed:new Date().toISOString()},null,2));
-        console.log(`已成功安装并启动 v${manifest.version}。在 Magpie → Agents 选择 Cursor · Magpie Bridge 和模型；首次连接后重启 Cursor 即可开始使用。`);
+        console.log(`已成功安装并启动 v${manifest.version}。在 Magpie → Agents 选择 Magpie-Cursor-Relay 和模型；首次连接后重启 Cursor 即可开始使用。`);
       }
     } finally {
       try { fs.rmdirSync(lock); } catch {}

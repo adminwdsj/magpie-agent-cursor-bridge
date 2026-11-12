@@ -1,8 +1,13 @@
-# Cursor · Magpie Bridge
+# Magpie-Cursor-Relay
 
 让 Cursor 编辑器直接使用 Magpie 中配置的全部模型与路由组。模型菜单返回 Magpie 模型目录，隐藏 Cursor 默认 Auto 入口，保留 Cursor 原有登录。
 
-此维护分支当前发布 **0.3.6，仅随包提供 Apple Silicon macOS 引擎**；Windows / Intel macOS 暂无对应发布产物。
+当前发布 **0.3.10，仅随包提供 Apple Silicon macOS 引擎**；Windows / Intel macOS 暂无对应发布产物。
+
+**和市场里其他 Cursor 插件的区别**
+
+- `@magpie-community/opencode-cursor-auth`（Cursor）方向相反：它登录你的 Cursor 订阅，让 Magpie 和其他 Agent 用 Cursor 的模型；本插件让 Cursor 用 Magpie 的模型。
+- `nodlles/magpie-agent-cursor-bridge` 与 `932633145/magpie-agent-cursor-bridge` 是本插件的上游。本插件在其基础上加了：续聊历史回退修复（0.3.4）、413 不再重试（0.3.5）、发布目录自带运行时动态库（0.3.6）、适配 Cursor 3.29.9 协议（0.3.7）、含图会话续聊（0.3.8）、模型名实时跟随 Magpie 且不显示 provider 前缀（0.3.9）。
 
 ---
 
@@ -17,10 +22,12 @@
 
 ### 安装方式
 
-在 Magpie → **Plugins** 添加仓库地址安装：
+在 Magpie → **Plugins** 搜索 **Magpie-Cursor-Relay** 安装，或在终端执行：
 ```text
-github:adminwdsj/magpie-agent-cursor-bridge
+magpie plugin add magpie-cursor-relay
 ```
+
+也可以直接从仓库安装：`github:adminwdsj/magpie-agent-cursor-bridge`。不要和上游的 `magpie-agent-cursor-bridge` 同时安装，两者使用同一个 Agent ID。
 
 ---
 
@@ -42,7 +49,7 @@ github:adminwdsj/magpie-agent-cursor-bridge
    *注：首次初始化时会检查并提示信任本机生成的本地根证书（系统标准确认窗口选择“是”即可）。*
 
 2. **在 Magpie 中选择模型**：
-   - 打开 Magpie，在 **Agents** 页面找到 **Cursor · Magpie Bridge**。
+   - 打开 Magpie，在 **Agents** 页面找到 **Magpie-Cursor-Relay**。
    - 打开开关，并从下拉列表中挑选您希望在 Cursor 中使用的模型或路由组。
 
 3. **在 Cursor 中刷新模型列表**：
@@ -64,7 +71,7 @@ github:adminwdsj/magpie-agent-cursor-bridge
    *根据系统提示完成本地钥匙串证书信任授权。*
 
 2. **在 Magpie 中选择模型**：
-   - 在 Magpie → **Agents** 中开启 **Cursor · Magpie Bridge** 并选择模型。
+   - 在 Magpie → **Agents** 中开启 **Magpie-Cursor-Relay** 并选择模型。
    - 等后台桥接启动完成（几十秒），在 Cursor 中打开对话面板或点一下模型下拉框即可看到 Magpie 的模型；无需重启 Cursor。
 
 ---

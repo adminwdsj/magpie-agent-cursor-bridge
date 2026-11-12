@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.10
+
+改名 **Magpie-Cursor-Relay**（npm 包 `magpie-cursor-relay`），准备上架 Magpie 插件市场，与同名上游 `magpie-agent-cursor-bridge` 区分。Agent ID 仍是 `cursor-bridge`，已有连接与设置不受影响。
+
+- `package.json` 的 `os`/`cpu` 改为实际随包提供的 `darwin`/`arm64`，不再声明 Windows 与 Intel。
+- 功能代码与 0.3.9 相同。
+
 ## 0.3.9
 
 修复 Connect 之后在 Magpie 新增的模型在 Cursor 里显示成 `provider/model` 完整 ID 的问题。

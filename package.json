@@ -1,8 +1,8 @@
 {
-  "name": "magpie-agent-cursor-bridge",
-  "version": "0.3.9",
+  "name": "magpie-cursor-relay",
+  "version": "0.3.10",
   "type": "module",
-  "description": "Magpie Cursor 协议桥，当前提供 Apple Silicon macOS 引擎",
+  "description": "Magpie-Cursor-Relay：让 Cursor 用 Magpie 的全部模型与路由组（Apple Silicon macOS）",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -26,12 +26,10 @@
     "jsonc-parser": "3.3.1"
   },
   "os": [
-    "darwin",
-    "win32"
+    "darwin"
   ],
   "cpu": [
-    "arm64",
-    "x64"
+    "arm64"
   ],
   "files": [
     "agent.js",
@@ -62,7 +60,6 @@
     "magpie-agent",
     "cursor",
     "byok",
-    "windows",
     "macos"
   ]
 }
