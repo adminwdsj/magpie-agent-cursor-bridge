@@ -1,3 +1,15 @@
+diff --git a/server/Cargo.toml b/server/Cargo.toml
+index 7f1f7f0..1aeb568 100644
+--- a/server/Cargo.toml
++++ b/server/Cargo.toml
+@@ -65,6 +65,7 @@ protoc-bin-vendored = "3"
+ [dev-dependencies]
+ flate2 = "1"
+ tempfile = "3"
++tokio = { version = "1", features = ["test-util"] }
+ tower = { version = "0.5", features = ["util"] }
+ 
+ [target.'cfg(windows)'.dependencies]
 diff --git a/server/examples/magpie_smoke.rs b/server/examples/magpie_smoke.rs
 new file mode 100644
 index 0000000..feccc36
@@ -86,6 +98,106 @@ index f069981..cbb0590 100644
      Ok(DecodedAppend {
          request_id: request_id.into(),
          seqno: request.append_seqno,
+diff --git a/server/src/api/cursor/run_sse.rs b/server/src/api/cursor/run_sse.rs
+index 6da2b52..80cbb84 100644
+--- a/server/src/api/cursor/run_sse.rs
++++ b/server/src/api/cursor/run_sse.rs
+@@ -10,13 +10,19 @@ use tokio_stream::StreamExt;
+ 
+ use crate::{
+     cursor::{
+-        protocol::connect::{self, END_STREAM_FLAG},
++        protocol::{
++            connect::{self, END_STREAM_FLAG},
++            events,
++        },
+         services::observability::CursorTraceRecorder,
+         transport::{TransportHandle, TransportRegistry},
+     },
+     Result,
+ };
+ 
++/// Well under Cursor's 30s advisory and 90s abort stall thresholds.
++const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
++
+ pub async fn stream(registry: &TransportRegistry, request_id: &str) -> Result<Response<Body>> {
+     let handle = registry.get_or_create(request_id).await?;
+     let receiver = handle.subscribe();
+@@ -48,7 +54,29 @@ fn local_body_stream(
+     async_stream::stream! {
+         let mut guard = LocalRunGuard::new(handle);
+         let mut trace = TraceStreamSink::new(trace, "byok_server");
+-        while let Some(chunk) = receiver.recv().await {
++        // Cursor's stall detector aborts a run after 90s without inbound
++        // activity and retries it, which upstream logs as a 499. A model that
++        // thinks silently (Gemini) easily passes that, so keep the stream warm.
++        // Written straight to this response so it never enters the replay log.
++        let heartbeat = connect::encode_message(&events::heartbeat()).ok();
++        let mut ticker = tokio::time::interval_at(
++            tokio::time::Instant::now() + HEARTBEAT_INTERVAL,
++            HEARTBEAT_INTERVAL,
++        );
++        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
++        loop {
++            let next = tokio::select! {
++                chunk = receiver.recv() => Some(chunk),
++                _ = ticker.tick() => None,
++            };
++            let Some(chunk) = next else {
++                if let Some(frame) = &heartbeat {
++                    yield Ok::<Bytes, Infallible>(frame.clone());
++                }
++                continue;
++            };
++            let Some(chunk) = chunk else { break };
++            ticker.reset();
+             let terminal = is_end_stream_frame(&chunk);
+             trace.chunk(&chunk);
+             if terminal {
+@@ -230,3 +258,43 @@ impl Drop for UpstreamRunGuard {
+             .finish_upstream(self.request_id.clone(), self.generation);
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{
++        cursor::{services::observability::CursorTraceService, transport::output::OutputHub},
++        store::Store,
++    };
++    use std::sync::Arc;
++
++    #[tokio::test]
++    async fn silent_run_is_kept_alive_with_heartbeats() {
++        let directory = tempfile::tempdir().unwrap();
++        let store = Store::connect(&format!(
++            "sqlite://{}",
++            directory.path().join("test.db").display()
++        ))
++        .await
++        .unwrap();
++        let trace = CursorTraceService::new(store).recorder("r");
++        let (commands, _commands_rx) = mpsc::channel(1);
++        let handle = TransportHandle::new("r".into(), commands, Arc::new(OutputHub::default()), trace);
++        let (sender, receiver) = mpsc::unbounded_channel();
++        tokio::time::pause();
++        let stream = local_body_stream(receiver, handle, None);
++        tokio::pin!(stream);
++
++        let started = tokio::time::Instant::now();
++        let first = stream.next().await.unwrap().unwrap();
++        assert_eq!(first, connect::encode_message(&events::heartbeat()).unwrap());
++        let waited = started.elapsed();
++        assert!(waited >= HEARTBEAT_INTERVAL && waited < HEARTBEAT_INTERVAL * 2, "{waited:?}");
++
++        let payload = Bytes::from_static(b"\x00\x00\x00\x00\x00");
++        sender.send(payload.clone()).unwrap();
++        assert_eq!(stream.next().await.unwrap().unwrap(), payload);
++        drop(sender);
++        assert!(stream.next().await.is_none());
++    }
++}
 diff --git a/server/src/bin/cursor-magpie-bridge.rs b/server/src/bin/cursor-magpie-bridge.rs
 new file mode 100644
 index 0000000..5361986
@@ -888,6 +1000,19 @@ index b9dbd08..209b430 100644
 +    }
 +
  }
+diff --git a/server/src/cursor/transport/mod.rs b/server/src/cursor/transport/mod.rs
+index 263e02c..fe18cc9 100644
+--- a/server/src/cursor/transport/mod.rs
++++ b/server/src/cursor/transport/mod.rs
+@@ -3,7 +3,7 @@
+ mod handle;
+ mod inbox;
+ mod lifecycle;
+-mod output;
++pub(crate) mod output;
+ mod registry;
+ 
+ pub use handle::*;
 diff --git a/server/src/local_app/mod.rs b/server/src/local_app/mod.rs
 index 7c50336..0bf45f1 100644
 --- a/server/src/local_app/mod.rs
