@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.16
+
+引擎源码收进本仓库 `engine/`，不再保存补丁、构建时也不再拉取外部代码；`scripts/build-native.sh` 直接编译仓库源码。排障记录见 `engine/SUBAGENT.md`。
+
+适配 Cursor 3.30.8：subagent 再次大量失败；新加的模型在菜单里显示成「名字 · 渠道」。
+
+- subagent：Cursor 3.30 起各个父级请求头独立发送，子 agent 请求可能只带 `x-parent-request-id`，或只带 `x-parent-agent-tool-call-id` 加 `x-root-parent-request-id`。引擎原先要求两个头必须同时出现，否则整条请求报 `Cursor subagent request must include both parent headers`。现在只按工具调用 ID 判断父子关系，父请求 ID 缺失时用根请求 ID 兜底；只有父请求 ID 时按普通请求处理。
+- 模型名：用户没在 Magpie 里改过名的模型，Magpie 交给插件的名字带 ` · 渠道` 后缀，桥原样透传。现在统一去掉这个后缀；改过名的模型仍以 Magpie 里的名字为准。
+- 安装器：Homebrew 把 Node 升到依赖 `libnode.137.dylib` 的版本后，安装器只认写死的 `libnode.127.dylib`，没把新库复制进发布目录，后台反复因缺库启动失败。现在按 `otool` 结果复制任意版本的 `libnode`；测试改为真正启动复制出的运行时。
+- 验证：新增父级请求头组合的引擎单测与模型名回归测试；引擎单测 170 项、Lodestar 回归 3 项、插件测试 74 项通过；本机安装后桥正常连接，菜单名已无渠道后缀。
+
 ## 0.3.15
 
 修复 Gemini（gemini-4-carbon / argon）等长时间静默思考的模型被 Cursor 反复中断，上游记大量 499。

@@ -21,6 +21,14 @@ test('model names follow live Magpie names, then snapshot, then bare model id',a
     assert.deepEqual(out.models.map(m=>m.name),['Live','Old','new-model']);
   } finally { globalThis.fetch=realFetch; }
 });
+test('an unrenamed model drops the provider suffix Magpie appends',async()=>{
+  const realFetch=globalThis.fetch;
+  globalThis.fetch=async()=>({ok:true,json:async()=>({data:[{id:'provider/model'},{id:'p/hydrogen'}]})});
+  try {
+    const out=await gatewayModels({...c,models:[{id:'provider/model',name:'Live'},{id:'p/hydrogen',name:'Gemini 4 Hydrogen · openai-mcfan'}]},{});
+    assert.deepEqual(out.models.map(m=>m.name),['Live','Gemini 4 Hydrogen']);
+  } finally { globalThis.fetch=realFetch; }
+});
 test('disconnected configuration is inactive',()=>{assert.equal(validate({}),null);assert.equal(validate({...c,enabled:false}),null);});
 test('refuses remote gateway and credential-bearing URL',()=>{for(const gateway of ['https://evil.example/v1','http://127.0.0.1.evil.example','http://key@127.0.0.1','file:///tmp/test'])assert.throws(()=>validate({...c,gateway}));});
 test('selected model must exist and IDs must be unique',()=>{assert.throws(()=>validate({...c,model:'missing'}));assert.throws(()=>validate({...c,models:[...c.models,...c.models]}));});

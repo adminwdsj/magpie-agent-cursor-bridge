@@ -146,9 +146,11 @@ test('complete staging never overwrites an existing running release',t=>{
  assert.ok(fs.existsSync(runtimeFile));
  if (!isWin) {
    assert.equal(fs.statSync(runtimeFile).mode&0o777,0o755);
-   if (spawnSync('/usr/bin/otool',['-L',runtimeFile],{encoding:'utf8'}).stdout.includes('@rpath/libnode.127.dylib')) {
-     assert.ok(fs.existsSync(path.join(two,'bin/libnode.127.dylib')));
+   for (const [,lib] of spawnSync('/usr/bin/otool',['-L',runtimeFile],{encoding:'utf8'}).stdout.matchAll(/@rpath\/(libnode\.\d+\.dylib)/g)) {
+     assert.ok(fs.existsSync(path.join(two,'bin',lib)),lib);
    }
+   // The staged runtime must start on its own, whatever Node version built it.
+   assert.equal(spawnSync(runtimeFile,['-e','0']).status,0);
  }
 });
 

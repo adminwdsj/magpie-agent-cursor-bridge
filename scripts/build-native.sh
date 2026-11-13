@@ -1,23 +1,19 @@
 #!/bin/bash
+# 从仓库里的 engine/ 源码编译原生引擎，写入 bin/ 并更新 integrity.json。
 set -euo pipefail
 bridge_package="$(cd -- "$(dirname -- "$0")/.." && pwd)"
-bridge_build="$(mktemp -d "${TMPDIR:-/tmp}/cursor-bridge-build.XXXXXX")"
-trap 'rm -rf -- "$bridge_build"' EXIT
 if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
   echo 'This release supports Apple Silicon macOS only.' >&2
   exit 1
 fi
-source_commit=31e9f5cbc98a7d28cffcb5efbb9323cd3e143354
-git init "$bridge_build/source"
-git -C "$bridge_build/source" remote add origin https://github.com/leookun/cursor-byok.git
-git -C "$bridge_build/source" fetch --depth 1 origin "$source_commit"
-git -C "$bridge_build/source" checkout --detach FETCH_HEAD
-[ "$(git -C "$bridge_build/source" rev-parse HEAD)" = "$source_commit" ]
-git -C "$bridge_build/source" apply "$bridge_package/source.patch"
-CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo test --manifest-path "$bridge_build/source/Cargo.toml" --release --locked -p cursor-server --test lodestar_replay_repro
-CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --manifest-path "$bridge_build/source/Cargo.toml" --release --locked -p cursor-server --bin cursor-magpie-bridge
+manifest="$bridge_package/engine/Cargo.toml"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$bridge_package/engine/target}"
+cargo test --manifest-path "$manifest" --release --locked -p cursor-server --lib
+cargo test --manifest-path "$manifest" --release --locked -p cursor-server --test lodestar_replay_repro
+cargo build --manifest-path "$manifest" --release --locked -p cursor-server --bin cursor-magpie-bridge
 mkdir -p "$bridge_package/bin"
-cp "${CARGO_TARGET_DIR:-$bridge_build/source/target}/release/cursor-magpie-bridge" "$bridge_package/bin/cursor-magpie-bridge.new"
+cp "$CARGO_TARGET_DIR/release/cursor-magpie-bridge" "$bridge_package/bin/cursor-magpie-bridge.new"
 chmod 755 "$bridge_package/bin/cursor-magpie-bridge.new"
 codesign --force --sign - "$bridge_package/bin/cursor-magpie-bridge.new"
 mv "$bridge_package/bin/cursor-magpie-bridge.new" "$bridge_package/bin/cursor-magpie-bridge"

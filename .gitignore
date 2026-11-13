@@ -9,3 +9,6 @@ SHA256SUMS
 
 # Windows engine removed: this fork ships macOS arm64 only.
 bin/cursor-magpie-bridge.exe
+
+# Engine build output when CARGO_TARGET_DIR is not set.
+engine/target/
