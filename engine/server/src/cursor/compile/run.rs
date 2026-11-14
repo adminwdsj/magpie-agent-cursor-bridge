@@ -136,7 +136,7 @@ pub(crate) async fn prepare(
         compacting,
         background_completion,
     } = action(request)?;
-    let checkpoint_mode = if request.subagent_type_name.is_some() {
+    let checkpoint_mode = if is_subagent_request(request, turn_user.as_ref()) {
         Mode::Subagent
     } else {
         mode_from_proto(mode_number)?
@@ -589,6 +589,14 @@ fn execute_plan(action: &pb::ExecutePlanAction) -> Result<ActionProjection> {
     })
 }
 
+/// 新建子代理带 subagent_type_name；用 Task 的 resume 续用时没有类型，只能靠 action() 给它合成的
+/// 消息 id 认出来。以前续用按 Agent 模式编译，子代理收到「You are now in Agent mode」模板和含 Task
+/// 的主代理工具集（2026-11-14 子代理 d2a3f7be 第二轮实测）。
+fn is_subagent_request(request: &pb::AgentRunRequest, turn_user: Option<&pb::UserMessage>) -> bool {
+    request.subagent_type_name.is_some()
+        || turn_user.is_some_and(|user| user.message_id.starts_with("synthetic-subagent:"))
+}
+
 pub(super) fn mode_from_proto(mode: i32) -> Result<Mode> {
     let mode = pb::AgentMode::try_from(mode)
         .map_err(|_| Error::Protocol(format!("unknown Cursor agent mode: {mode}")))?;
@@ -700,6 +708,11 @@ mod tests {
             .turns
             .push(b"t3".to_vec());
         assert_ne!(input, action(&request).unwrap().input_id.unwrap());
+        // 续用的子代理仍按子代理模式编译，不能退回主代理模板和工具集。
+        let user = action(&request).unwrap().turn_user;
+        assert!(is_subagent_request(&request, user.as_ref()));
+        let main = user_request("abc123", None);
+        assert!(!is_subagent_request(&main, action(&main).unwrap().turn_user.as_ref()));
     }
 
     #[test]
