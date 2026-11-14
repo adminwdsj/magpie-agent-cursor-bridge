@@ -2,7 +2,7 @@
 set -eu
 bridge_source="$(cd -- "$(dirname -- "$0")" && pwd)"
 case "${1:-setup}" in
-  --help|-h) echo 'Usage: bash setup.command [setup|status|uninstall|--version]'; exit 0 ;;
+  --help|-h) echo 'Usage: bash setup.command [setup|status|uninstall|db|--version]  (db clean --help 见 node install.js --help)'; exit 0 ;;
 esac
 # Magpie downloads its managed Bun when installing a plugin. No extra Node installation.
 bridge_bun_root="${XDG_CACHE_HOME:-$HOME/.cache}/magpie/bun"

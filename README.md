@@ -91,6 +91,21 @@ magpie plugin add magpie-cursor-relay
 | **启动/更新服务** | `powershell -ExecutionPolicy Bypass -File setup.ps1` | `bash setup.command` |
 | **查看后台运行状态** | `powershell -ExecutionPolicy Bypass -File setup.ps1 status` | `bash setup.command status` |
 | **停用并卸载（含删除根证书）** | `powershell -ExecutionPolicy Bypass -File setup.ps1 uninstall` | `bash setup.command uninstall` |
+| **查看数据库占用** | — | `bash setup.command db` |
+| **清理数据库** | — | `bash setup.command db clean <范围>` |
+
+### 数据库清理
+
+`~/.config/magpie-cursor-bridge/data/bridge.db` 保存全部会话、检查点和调用记录，只增不减。清理前会停掉后台桥，清完自动重新启动，期间 Cursor 里正在进行的对话会中断，最好在空闲时做。
+
+| 范围 | 清理内容 |
+| :--- | :--- |
+| `traces` | 模型调用日志与 Cursor 请求追踪 |
+| `sessions --days N` | 超过 N 天（默认 30）没更新的会话及其消息、检查点、运行与工具调用；内容块保留。被清掉的旧会话在 Cursor 里重新打开后可能无法续聊 |
+| `vacuum` | 只压缩文件，回收已删数据占的空间 |
+| `all --yes` | 清空全部运行数据（含内容块），只保留模型配置与服务设置；所有旧会话都无法续聊 |
+
+默认清理后自动压缩，加 `--no-vacuum` 跳过。压缩需要约一倍数据库大小的空闲磁盘。删除在一个事务里完成，删完会核对外键；核对不过就整体回滚，数据不变。
 
 - **断开连接**：在 Magpie 的 Agents 页面选择 Disconnect，或在终端执行 `magpie cursor-bridge default`。
 - **代理自愈与还原**：当桥接服务退出或在 Magpie 中断开连接时，Cursor 的代理配置会自动恢复为初始状态。

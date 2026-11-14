@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {atomic,restoreProxy} from './lib/settings.js';
-import {paths,run,verifyPackage,initializeCertificate,removeCertificate,stage,activate,stopJob,label} from './lib/install.js';
+import {paths,run,verifyPackage,initializeCertificate,removeCertificate,stage,activate,stopJob,bootstrap,label} from './lib/install.js';
+import {readDatabase,cleanDatabase,SCOPES} from './lib/database.js';
 const source=path.dirname(fileURLToPath(import.meta.url));
 const manifest=JSON.parse(fs.readFileSync(path.join(source,'package.json'),'utf8'));
 const command=process.argv[2]||'setup';
@@ -46,13 +47,66 @@ function findMagpie() {
   return fs.existsSync(macPath) ? macPath : null;
 }
 
+function bytes(value) {
+  if (value === null || value === undefined) return '—';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let n = Number(value), i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+async function databaseCommand([action = 'stats', scope, ...flags]) {
+  const dbPath = path.join(p.root, 'data/bridge.db');
+  if (action === 'stats') {
+    const info = await readDatabase(dbPath);
+    if (!info.exists) return console.log(`数据库尚未创建：${dbPath}`);
+    const day = ms => ms ? new Date(ms).toLocaleString() : '—';
+    console.log(`${dbPath}\n文件 ${bytes(info.file.total)}（主文件 ${bytes(info.file.db)}，WAL ${bytes(info.file.wal)}，空闲页 ${bytes(info.freeBytes)}）`);
+    console.log(`会话更新时间 ${day(info.conversations.oldest)} ～ ${day(info.conversations.newest)}`);
+    for (const table of [...info.tables].sort((a, b) => (b.bytes ?? -1) - (a.bytes ?? -1))) {
+      console.log(`  ${table.name.padEnd(28)} ${String(table.rows).padStart(9)} 行  ${bytes(table.bytes).padStart(9)}`);
+    }
+    return;
+  }
+  if (action !== 'clean') throw new Error('用法：node install.js db [stats | clean <范围>]，详见 --help');
+  const daysFlag = flags.indexOf('--days');
+  const olderThanDays = daysFlag >= 0 ? Number(flags[daysFlag + 1]) : 30;
+  if (scope === 'all' && !flags.includes('--yes')) throw new Error('清空全部运行数据不可恢复，确认后加 --yes 重新执行');
+  if (!SCOPES.includes(scope)) throw new Error(`清理范围需为 ${SCOPES.join(' / ')}`);
+  if (process.platform !== 'darwin') throw new Error('数据库清理目前只支持 macOS');
+  const domain = `gui/${process.getuid()}`;
+  const lock = path.join(p.root, 'installer.lock');
+  try { fs.mkdirSync(lock); } catch { throw new Error('另一个安装程序正在运行；若上次被强制终止，请检查后移除 installer.lock 再重试'); }
+  // 引擎在 WAL 模式下一直开着数据库；先停后台，删除和 VACUUM 才不会和它抢写锁。
+  const running = run('/bin/launchctl', ['print', `${domain}/${label}`], {optional: true}).status === 0;
+  try {
+    if (running) await stopJob(p, domain);
+    const result = await cleanDatabase(dbPath, {scope, olderThanDays, vacuum: !flags.includes('--no-vacuum')});
+    for (const [table, count] of Object.entries(result.counts)) console.log(`  删除 ${table} ${count} 行`);
+    console.log(`完成：${bytes(result.before.total)} → ${bytes(result.after.total)}，释放 ${bytes(result.reclaimed)}，用时 ${(result.durationMs / 1000).toFixed(1)} 秒`);
+  } finally {
+    if (running && p.plist && fs.existsSync(p.plist)) await bootstrap(p, domain);
+    try { fs.rmdirSync(lock); } catch {}
+  }
+}
+
 try {
   if(command==='--help'||command==='-h') {
-    console.log('Usage: node install.js [setup|status|uninstall|--version]\nsetup: install/update the paired plugin and service.');
+    console.log(`Usage: node install.js [setup|status|uninstall|db|--version]
+setup: install/update the paired plugin and service.
+db: show bridge.db usage.
+db clean traces|sessions|vacuum|all [--days N] [--no-vacuum] [--yes]
+  traces   调用日志与请求追踪
+  sessions 超过 N 天（默认 30）没更新的会话、消息、检查点与工具调用；内容块保留
+  vacuum   只压缩数据库文件
+  all      清空全部运行数据（含内容块），保留模型配置与服务设置；需加 --yes
+  清理前会停掉后台桥，结束后自动重新启动。`);
   } else if(command==='--version') {
     console.log(manifest.version);
   } else if(command==='status') {
     console.log(fs.existsSync(path.join(p.root,'status.json'))?fs.readFileSync(path.join(p.root,'status.json'),'utf8'):'未安装或尚未运行');
+  } else if(command==='db') {
+    await databaseCommand(process.argv.slice(3));
   } else {
     if(!['setup','uninstall'].includes(command)) throw new Error('未知命令；使用 --help 查看用法');
     const isSupported = (process.platform === 'darwin' && process.arch === 'arm64') || (process.platform === 'win32' && process.arch === 'x64');
