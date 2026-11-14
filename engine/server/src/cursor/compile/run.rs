@@ -443,20 +443,20 @@ fn action(request: &pb::AgentRunRequest) -> Result<ActionProjection> {
             } else {
                 user.mode
             };
-            // A front subagent (run_in_background false/absent) arrives without a
-            // message_id. Synthesise a deterministic one from the subagent kind and
-            // its text so the turn compiles through the normal path instead of being
-            // rejected; a non-subagent empty id is still a real protocol error.
+            // 子代理的用户消息不带 message_id：新建的前台子代理带 subagent_type_name；
+            // 用 Task 的 resume 续用已有子代理时连类型也没有（2026-11-14 实测，以前整条被拒）。
+            // 用「类型 + 已有轮数 + 文本」合成确定性 id：同一条消息重试时三者不变、id 不变，
+            // 续用时再发的新消息轮数已变、id 不同。主对话的消息一直带 message_id，不走这里。
             let mut user = user.clone();
             if user.message_id.is_empty() {
-                let Some(kind) = request.subagent_type_name.as_deref() else {
-                    return Err(Error::Protocol(
-                        "Cursor user message action has no message_id".into(),
-                    ));
-                };
+                let kind = request.subagent_type_name.as_deref().unwrap_or("resume");
+                let turns = request
+                    .conversation_state
+                    .as_ref()
+                    .map_or(0, |state| state.turns.len());
                 user.message_id = format!(
                     "synthetic-subagent:{}",
-                    BlobId::digest(format!("{kind}\0{}", user.text).as_bytes()).to_base64()
+                    BlobId::digest(format!("{kind}\0{turns}\0{}", user.text).as_bytes()).to_base64()
                 );
             }
             if user.text.trim() == "/summarize" {
@@ -675,8 +675,24 @@ mod tests {
     }
 
     #[test]
-    fn non_subagent_without_message_id_is_still_rejected() {
-        assert!(action(&user_request("", None)).is_err());
+    fn resumed_subagent_without_message_id_or_type_is_accepted() {
+        // Task 的 resume：子代理会话已有历史，请求既没有 message_id 也没有子代理类型。
+        let mut request = user_request("", None);
+        request.conversation_state = Some(pb::ConversationStateStructure {
+            turns: vec![b"t1".to_vec(), b"t2".to_vec()],
+            ..Default::default()
+        });
+        let input = action(&request).unwrap().input_id.unwrap();
+        assert!(input.starts_with("cursor:user:synthetic-subagent:"), "{input}");
+        // 重试同一条消息 id 不变；续用后再发同样的文本，轮数变了，id 也要变。
+        assert_eq!(input, action(&request).unwrap().input_id.unwrap());
+        request
+            .conversation_state
+            .as_mut()
+            .unwrap()
+            .turns
+            .push(b"t3".to_vec());
+        assert_ne!(input, action(&request).unwrap().input_id.unwrap());
     }
 
     #[test]

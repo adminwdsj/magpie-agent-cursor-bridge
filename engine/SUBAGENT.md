@@ -13,7 +13,7 @@ Cursor 派 subagent 失败时按下面的顺序查。路径都相对 `engine/`�
 
 | 报错 | 原因 | 修法所在 |
 |---|---|---|
-| `Cursor user message action has no message_id` | 前台 subagent 的 action 不带 `message_id` | `server/src/cursor/compile/run.rs`：subagent 请求按「类型 + 文本」合成确定性 id；非 subagent 的空 id 仍报错 |
+| `Cursor user message action has no message_id` | 前台 subagent 的 action 不带 `message_id`；用 Task 的 `resume` 续用已有 subagent 时连 `subagent_type_name` 也没有 | `server/src/cursor/compile/run.rs`：缺 id 时按「类型（续用记为 resume）+ 已有轮数 + 文本」合成确定性 id |
 | `invalid wire type value: 6/7` | 服务端开关 `agent_host_local_loop` 让 subagent 改走本地循环 + `RunInference` 协议 | `server/src/cursor/services/analytics.rs`：改写 BootstrapStatsig 时关掉该开关 |
 | `Cursor subagent request must include both parent headers` | Cursor 3.30 起父级请求头各自独立发送 | `server/src/api/cursor/handlers.rs` 的 `parent_headers`：只按 `x-parent-agent-tool-call-id` 判断父子关系，父请求 ID 缺失时用根请求 ID 兜底 |
 | 后台子代理跑完，父对话不继续；子代理一直显示「Stopped」 | 完成通知在父对话流上到达时被当作不支持的动作丢弃；检查点没写回完成状态 | `server/src/cursor/conversation/runtime.rs`（转发 `BackgroundTaskCompletionAction`）、`conversation/output.rs`（注入当前轮）、`checkpoint/builder.rs`（`record_subagent_completions`）；未登录时的开关在 `services/analytics.rs` |
