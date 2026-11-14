@@ -368,7 +368,8 @@ impl ConversationRuntime {
                                     //
                                     // 1. AgentRunRequest.action starts/resumes a Run. compile::prepare
                                     //    currently consumes UserMessageAction,
-                                    //    BackgroundTaskCompletionAction, SummarizeAction and
+                                    //    BackgroundTaskCompletionAction, AsyncAskQuestionCompletionAction,
+                                    //    SummarizeAction and
                                     //    ExecutePlanAction. ResumeAction only works indirectly through
                                     //    the absence of a new runtime event and still needs an explicit
                                     //    implementation that consumes ResumeAction.request_context.
@@ -383,8 +384,7 @@ impl ConversationRuntime {
                                     // old Run ends. It must not be reduced to handle.cancel() here.
                                     //
                                     // The remaining unimplemented Action variants are
-                                    // ShellCommandAction, StartPlanAction,
-                                    // AsyncAskQuestionCompletionAction, BackgroundShellAction,
+                                    // ShellCommandAction, StartPlanAction, BackgroundShellAction,
                                     // BackgroundSubagentAction,
                                     // SubscriptionNotificationAction and GoalContinuationAction.
                                     // Variants whose wire behavior is not captured yet need evidence
@@ -397,9 +397,10 @@ impl ConversationRuntime {
                                     ) => match conversation_action.action.clone() {
                                         Some(
                                             ref action @ (pb::conversation_action::Action::UserMessageAction(_)
-                                            | pb::conversation_action::Action::BackgroundTaskCompletionAction(_)),
+                                            | pb::conversation_action::Action::BackgroundTaskCompletionAction(_)
+                                            | pb::conversation_action::Action::AsyncAskQuestionCompletionAction(_)),
                                         ) => {
-                                            // 后台子代理的完成通知和用户追加消息走同一条路：
+                                            // 后台子代理和异步提问的完成通知、用户追加消息走同一条路：
                                             // 父对话还在输出就注入当前轮，否则用它开新一轮。
                                             // 以前这里直接丢弃，父对话就停在子代理后面不动了。
                                             let delivered_to_active_run =
@@ -833,6 +834,9 @@ fn active_runtime_action(action: &pb::conversation_action::Action) -> compile::R
     match action {
         pb::conversation_action::Action::BackgroundTaskCompletionAction(action) => {
             compile::RuntimeAction::BackgroundCompletion(action.clone())
+        }
+        pb::conversation_action::Action::AsyncAskQuestionCompletionAction(action) => {
+            compile::RuntimeAction::AskQuestionCompletion(action.clone())
         }
         pb::conversation_action::Action::UserMessageAction(action) => {
             compile::RuntimeAction::UserMessage(action.clone())

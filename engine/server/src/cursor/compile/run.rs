@@ -496,20 +496,12 @@ fn action(request: &pb::AgentRunRequest) -> Result<ActionProjection> {
                 background_completion: false,
             })
         }
-        pb::conversation_action::Action::BackgroundTaskCompletionAction(action) => {
-            let projection = insert_messages::project(action, mode)?;
-            let event_id = projection.turn_user.message_id.clone();
-            Ok(ActionProjection {
-                mode,
-                action_context: projection.context,
-                event_id: Some(event_id),
-                input_id: None,
-                turn_user: Some(projection.turn_user),
-                starts_turn: true,
-                compacting: false,
-                background_completion: true,
-            })
-        }
+        pb::conversation_action::Action::BackgroundTaskCompletionAction(action) => Ok(
+            completion_projection(insert_messages::project(action, mode)?, mode),
+        ),
+        pb::conversation_action::Action::AsyncAskQuestionCompletionAction(action) => Ok(
+            completion_projection(insert_messages::project_ask_question(action, mode)?, mode),
+        ),
         pb::conversation_action::Action::ExecutePlanAction(action) => execute_plan(action),
         pb::conversation_action::Action::SummarizeAction(_) => Ok(ActionProjection {
             mode,
@@ -531,6 +523,21 @@ fn action(request: &pb::AgentRunRequest) -> Result<ActionProjection> {
             compacting: false,
             background_completion: false,
         }),
+    }
+}
+
+/// 后台任务和异步提问的完成通知都按「系统通知 + 模拟用户消息」开新一轮。
+fn completion_projection(projection: insert_messages::Projection, mode: i32) -> ActionProjection {
+    let event_id = projection.turn_user.message_id.clone();
+    ActionProjection {
+        mode,
+        action_context: projection.context,
+        event_id: Some(event_id),
+        input_id: None,
+        turn_user: Some(projection.turn_user),
+        starts_turn: true,
+        compacting: false,
+        background_completion: true,
     }
 }
 
@@ -699,5 +706,55 @@ mod tests {
     fn real_message_id_is_preserved() {
         let projection = action(&user_request("abc123", Some("explore"))).unwrap();
         assert_eq!(projection.input_id.unwrap(), "cursor:user:abc123");
+    }
+
+    #[test]
+    fn async_ask_question_answer_reaches_the_model() {
+        use pb::ask_question_args::{Option as Choice, Question};
+        let question = Question {
+            id: "q1".into(),
+            prompt: "Which fix first?".into(),
+            options: vec![
+                Choice { id: "a".into(), label: "Reopen fast drafts".into() },
+                Choice { id: "b".into(), label: "Split long turns".into() },
+            ],
+            allow_multiple: false,
+        };
+        let request = pb::AgentRunRequest {
+            action: Some(pb::ConversationAction {
+                action: Some(pb::conversation_action::Action::AsyncAskQuestionCompletionAction(
+                    pb::AsyncAskQuestionCompletionAction {
+                        original_tool_call_id: "call-7".into(),
+                        original_args: Some(pb::AskQuestionArgs {
+                            title: "Pick a direction".into(),
+                            questions: vec![question],
+                            ..Default::default()
+                        }),
+                        result: Some(pb::AskQuestionResult {
+                            result: Some(pb::ask_question_result::Result::Success(
+                                pb::AskQuestionSuccess {
+                                    answers: vec![pb::ask_question_success::Answer {
+                                        question_id: "q1".into(),
+                                        selected_option_ids: vec!["b".into()],
+                                        freeform_text: "only for voice".into(),
+                                    }],
+                                },
+                            )),
+                        }),
+                    },
+                )),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let projection = action(&request).unwrap();
+        // 以前落到兜底分支：不开新一轮、没有用户消息，模型看不到回答。
+        assert!(projection.starts_turn && projection.background_completion);
+        assert_eq!(projection.event_id.as_deref(), Some("ask-question-completed:call-7"));
+        assert!(projection.turn_user.is_some());
+        for expected in ["Which fix first?", "Split long turns", "only for voice", "Pick a direction"] {
+            assert!(projection.action_context.contains(expected), "{expected}");
+        }
+        assert!(!projection.action_context.contains("Reopen fast drafts"));
     }
 }

@@ -14,7 +14,8 @@ use crate::{
             CheckpointBuilder,
         },
         compile::{
-            compile_background_completion, compile_injection, compile_user_message_action,
+            compile_ask_question_completion, compile_background_completion, compile_injection,
+            compile_user_message_action,
             CursorRunContext, RuntimeAction,
         },
         prompting::PromptCompiler,
@@ -245,8 +246,34 @@ impl ConversationOutput {
                         .await?;
                     }
                     RuntimeAction::BackgroundCompletion(action) => {
-                        self.forward_background_completion(
-                            action,
+                        self.checkpoint.record_subagent_completions(&action);
+                        let compiled = compile_background_completion(
+                            &action,
+                            self.context.mode,
+                            &self.context.request_context,
+                            &self.blob_sync,
+                        )
+                        .await?;
+                        self.forward_completion_notice(
+                            compiled,
+                            active_round.as_ref(),
+                            &active_tool_calls,
+                            &completions,
+                            &mut interrupted_rounds,
+                            &mut interrupted_tool_calls,
+                        )
+                        .await?;
+                    }
+                    RuntimeAction::AskQuestionCompletion(action) => {
+                        let compiled = compile_ask_question_completion(
+                            &action,
+                            self.context.mode,
+                            &self.context.request_context,
+                            &self.blob_sync,
+                        )
+                        .await?;
+                        self.forward_completion_notice(
+                            compiled,
                             active_round.as_ref(),
                             &active_tool_calls,
                             &completions,
@@ -877,23 +904,16 @@ impl ConversationOutput {
         .await
     }
 
-    async fn forward_background_completion(
+    /// 后台任务或异步提问的完成通知：作为注入排进当前轮，同一事件只排一次。
+    async fn forward_completion_notice(
         &mut self,
-        action: pb::BackgroundTaskCompletionAction,
+        (event_id, user_message, message): (String, pb::UserMessage, crate::model::CanonicalMessage),
         active_round: Option<&ToolRoundId>,
         active_tool_calls: &HashSet<String>,
         completions: &HashMap<String, ToolCompletion>,
         interrupted_rounds: &mut HashSet<ToolRoundId>,
         interrupted_tool_calls: &mut HashSet<String>,
     ) -> Result<()> {
-        self.checkpoint.record_subagent_completions(&action);
-        let (event_id, user_message, message) = compile_background_completion(
-            &action,
-            self.context.mode,
-            &self.context.request_context,
-            &self.blob_sync,
-        )
-        .await?;
         let injection_id = format!("background-completion:{event_id}");
         if self.injection_ids.contains(&injection_id) {
             return Ok(());

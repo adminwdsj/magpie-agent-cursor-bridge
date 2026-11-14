@@ -394,6 +394,11 @@ fn failure(
 /// so only the head before the body is inspected. 408 and 425 are timing
 /// failures and stay retryable.
 pub(crate) fn is_rejected_request(message: &str) -> bool {
+    // CPA 的 antigravity 通道对「已提交、结果不明」的同一请求返回 409，并永久拒收原样重发；
+    // 经 Magpie 网关转出来的报错不带状态码，只能认文字。原样重试 8 次只会把失败拖长一分多钟。
+    if message.contains("this prompt was already submitted") {
+        return true;
+    }
     let head = message.split_once(": ").map_or(message, |(head, _)| head);
     head.split_whitespace().any(|token| {
         token.len() == 3
@@ -550,5 +555,18 @@ mod tests {
             None,
         );
         assert!(body_number.retryable);
+        // 2026-11-14 实测：网关转出来的 409 不带状态码，引擎原样重试 8 次全部 409。
+        let duplicate = failure(
+            RunFailure::Provider(
+                "OpenAI Responses error: openai-mcfan: antigravity-bridge: agy bridge: this prompt \
+                 was already submitted; its outcome is unknown or terminal, so the same logical \
+                 request cannot be sent again"
+                    .into(),
+            ),
+            String::new(),
+            String::new(),
+            None,
+        );
+        assert!(!duplicate.retryable);
     }
 }

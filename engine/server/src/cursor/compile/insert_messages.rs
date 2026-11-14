@@ -145,6 +145,100 @@ pub(super) fn project(
     })
 }
 
+pub(super) const ASK_FOLLOW_UP: &str = concat!(
+    "The user has responded to the questions above. ",
+    "Continue the task using their answers; do not ask the same questions again."
+);
+
+/// 异步提问（AskQuestion 的 run_async）答完后，Cursor 发 AsyncAskQuestionCompletionAction
+/// 让对话接着跑。把原题和回答放进上下文，模型才知道用户选了什么；以前这个动作没人处理，
+/// 模型只看到旧上下文，回复和用户的选择对不上（2026-11-14 实测）。
+pub(super) fn project_ask_question(
+    action: &pb::AsyncAskQuestionCompletionAction,
+    mode: i32,
+) -> Result<Projection> {
+    use pb::ask_question_result::Result as R;
+    let tool_call_id = action.original_tool_call_id.as_str();
+    if tool_call_id.is_empty() {
+        return Err(Error::Protocol(
+            "ask question completion has no original_tool_call_id".into(),
+        ));
+    }
+    let args = action.original_args.clone().unwrap_or_default();
+    let body = match action
+        .result
+        .as_ref()
+        .and_then(|result| result.result.as_ref())
+        .ok_or_else(|| Error::Protocol("ask question completion has no result".into()))?
+    {
+        R::Success(success) => {
+            let mut lines = vec!["status: answered".to_string()];
+            for answer in &success.answers {
+                let question = args.questions.iter().find(|q| q.id == answer.question_id);
+                let mut picked = answer
+                    .selected_option_ids
+                    .iter()
+                    .map(|id| {
+                        question
+                            .and_then(|q| q.options.iter().find(|option| &option.id == id))
+                            .map_or(id.as_str(), |option| option.label.as_str())
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>();
+                if !answer.freeform_text.trim().is_empty() {
+                    picked.push(answer.freeform_text.trim().to_string());
+                }
+                let prompt = question
+                    .map(|q| q.prompt.as_str())
+                    .filter(|prompt| !prompt.is_empty())
+                    .unwrap_or(answer.question_id.as_str());
+                let answer = if picked.is_empty() {
+                    "(no answer)".to_string()
+                } else {
+                    picked.join("; ")
+                };
+                lines.push(format!("question: {prompt}\nanswer: {answer}"));
+            }
+            lines.join("\n")
+        }
+        R::Error(error) => format!("status: error\nerror: {}", error.error_message),
+        R::Rejected(rejected) => format!("status: rejected\nreason: {}", rejected.reason),
+        R::Async(_) => {
+            return Err(Error::Protocol(
+                "ask question completion is still pending".into(),
+            ))
+        }
+    };
+    let title = Some(args.title.as_str()).filter(|title| !title.is_empty());
+    let header = title.map_or(String::new(), |title| format!("title: {title}\n"));
+    Ok(Projection {
+        context: format!(
+            "<system_notification>\nThe questions you asked earlier (tool_call_id: {tool_call_id}) now have a response.\n\n<ask_question_result>\n{header}{body}\n</ask_question_result>\n</system_notification>"
+        ),
+        turn_user: pb::UserMessage {
+            text: ASK_FOLLOW_UP.into(),
+            message_id: format!("ask-question-completed:{tool_call_id}"),
+            mode,
+            is_simulated_msg: Some(true),
+            simulated_message_metadata: Some(pb::user_message::SimulatedMessageMetadata {
+                title: Some(title.unwrap_or("Questions answered").into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    })
+}
+
+/// 正在输出的对话收到提问完成通知时，编译成和新 Run 同样的消息。
+pub(crate) async fn compile_ask_question_completion(
+    action: &pb::AsyncAskQuestionCompletionAction,
+    mode: i32,
+    request_context: &pb::RequestContext,
+    blobs: &BlobSynchronizer,
+) -> Result<(String, pb::UserMessage, CanonicalMessage)> {
+    compile_projection(project_ask_question(action, mode)?, request_context, blobs).await
+}
+
 /// 正在输出的父对话收到后台任务完成通知时，编译成和新 Run 同样的消息：
 /// 返回事件 ID、Cursor 显示的模拟用户消息、模型读到的消息。
 pub(crate) async fn compile_background_completion(
@@ -153,7 +247,14 @@ pub(crate) async fn compile_background_completion(
     request_context: &pb::RequestContext,
     blobs: &BlobSynchronizer,
 ) -> Result<(String, pb::UserMessage, CanonicalMessage)> {
-    let mut projection = project(action, mode)?;
+    compile_projection(project(action, mode)?, request_context, blobs).await
+}
+
+async fn compile_projection(
+    mut projection: Projection,
+    request_context: &pb::RequestContext,
+    blobs: &BlobSynchronizer,
+) -> Result<(String, pb::UserMessage, CanonicalMessage)> {
     let event_id = projection.turn_user.message_id.clone();
     let (message, text) = super::break_messages::compile_background(
         event_id.clone(),

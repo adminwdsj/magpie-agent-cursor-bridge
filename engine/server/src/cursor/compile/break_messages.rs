@@ -21,6 +21,7 @@ pub(crate) enum RuntimeAction {
     Inject(pb::InjectContextAction),
     UserMessage(pb::UserMessageAction),
     BackgroundCompletion(pb::BackgroundTaskCompletionAction),
+    AskQuestionCompletion(pb::AsyncAskQuestionCompletionAction),
 }
 
 pub(crate) async fn compile_user_message_action(

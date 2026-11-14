@@ -65,9 +65,14 @@ impl Store {
             .bind(now_ms())
             .execute(&mut **tx)
             .await?;
+        // 只登记本机有的子内容块。续接 Cursor 侧生成的轮次时，轮次本身是从 Cursor 取回的，
+        // 它引用的用户消息和步骤只存在 Cursor 那边；为这种子块登记引用会触发外键失败，
+        // 整轮在模型已回复后报 FOREIGN KEY constraint failed（2026-11-14 AskQuestion 续接实测）。
+        // 引用表只用于本机统计与清理，本机没有的块本来就不归它管。
         for edge in edges {
             sqlx::query(
-                "INSERT OR IGNORE INTO blob_edges(parent_blob_id, child_blob_id, field_name) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO blob_edges(parent_blob_id, child_blob_id, field_name)
+                 SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM blobs WHERE blob_id = ?2)",
             )
             .bind(blob_id.as_bytes().as_slice())
             .bind(edge.child.as_bytes().as_slice())
@@ -104,5 +109,30 @@ impl Store {
         let mut closure: Vec<_> = seen.into_iter().collect();
         closure.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
         Ok(closure)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn edge_to_blob_held_only_by_cursor_is_skipped_not_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::connect(&format!("sqlite://{}", dir.path().join("t.db").display()))
+            .await
+            .unwrap();
+        let local = store.put_blob(b"local-step", &[]).await.unwrap();
+        let remote = BlobId::digest(b"cursor-only-step");
+        let edge = |child: &BlobId, name: &str| BlobEdge {
+            child: child.clone(),
+            field_name: name.into(),
+        };
+        let turn = store
+            .put_blob(b"turn", &[edge(&local, "steps[0]"), edge(&remote, "steps[1]")])
+            .await
+            .unwrap();
+        assert_eq!(store.blob_closure(&[turn.clone()]).await.unwrap().len(), 2);
+        assert!(!store.blob_closure(&[turn]).await.unwrap().contains(&remote));
     }
 }

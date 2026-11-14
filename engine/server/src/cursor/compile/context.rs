@@ -110,7 +110,10 @@ fn is_background_completion(request: &pb::AgentRunRequest) -> bool {
             .action
             .as_ref()
             .and_then(|action| action.action.as_ref()),
-        Some(pb::conversation_action::Action::BackgroundTaskCompletionAction(_))
+        Some(
+            pb::conversation_action::Action::BackgroundTaskCompletionAction(_)
+                | pb::conversation_action::Action::AsyncAskQuestionCompletionAction(_)
+        )
     )
 }
 
