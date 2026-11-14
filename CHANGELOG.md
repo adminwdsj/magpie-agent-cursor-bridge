@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.17
+
+后台子代理跑完后，父对话能接着往下走；子代理状态不再一直显示「Stopped」。
+
+- 完成通知：父对话还在输出时，Cursor 会把后台子代理的完成通知（`BackgroundTaskCompletionAction`）追加到当前流上。引擎以前把它当不支持的动作直接丢弃，父对话就停在子代理后面不动。现在和用户追加消息走同一条路：父对话还在输出就注入当前轮，已经停下就用这条通知开新一轮。
+- 子代理状态：收到完成通知后，把检查点里对应子代理的状态从 `Backgrounded` 改成成功、出错或已中止，并写入完成时间。
+- 开关：Cursor 只有在 `long_running_jobs`、`cursor_agent_host`、`agent_store_sync_client` 都打开时才派发完成通知。登录状态下服务端本来就是开的（本机实测）；未登录、Cursor 退回桥本地开关表时，现在也显式打开。`agent_host_local_loop` 仍然关闭。
+- 不带模型的首条追加：本地 agent host 可能先发心跳或工具结果再发 RunRequest，以前报 `first BidiAppend message must select a model` 拒收，现在按本地请求处理。Cursor 官方流的第一条一定带模型，不受影响。
+- 诊断日志：引擎启动时初始化日志，默认只记警告和错误，写入本机 `engine-stderr.log`；需要时用 `RUST_LOG=cursor_server=info` 调高。
+- 参考了 kingchen95272025/magpie-agent-cursor-bridge-enhanced 0.2.7 的做法；没有照搬「桥主动唤醒父对话、父对话保持 15 分钟不结束」那一层，Cursor 自己会派发完成通知，等有证据表明它漏发再加。
+- 验证：新增完成状态写回、本地开关表两项单测。
+
 ## 0.3.16
 
 引擎源码收进本仓库 `engine/`，不再保存补丁、构建时也不再拉取外部代码；`scripts/build-native.sh` 直接编译仓库源码。排障记录见 `engine/SUBAGENT.md`。

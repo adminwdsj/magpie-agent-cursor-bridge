@@ -199,6 +199,16 @@ impl CheckpointBuilder {
         Ok(checkpoint)
     }
 
+    /// 把后台任务完成通知写进子代理运行状态。不写的话检查点一直报
+    /// `Backgrounded`，子代理跑完了 Cursor 仍显示「Stopped」。
+    pub fn record_subagent_completions(&mut self, action: &pb::BackgroundTaskCompletionAction) {
+        apply_subagent_completions(
+            &mut self.base,
+            action,
+            crate::cursor::tools::runtime::now_ms(),
+        );
+    }
+
     fn record_background_subagents(&mut self, presentation: &PendingSteps) {
         for step in &presentation.steps {
             let Some(pb::conversation_step::Message::ToolCall(call)) = step.message.as_ref() else {
@@ -296,4 +306,86 @@ impl CheckpointBuilder {
 
 fn context_limit(selected: Option<u64>, previous: Option<u64>) -> Option<u64> {
     selected.or(previous.filter(|tokens| *tokens != 0))
+}
+
+fn apply_subagent_completions(
+    base: &mut pb::ConversationStateStructure,
+    action: &pb::BackgroundTaskCompletionAction,
+    now: u64,
+) {
+    for completion in &action.completions {
+        if completion.kind != pb::BackgroundTaskKind::Subagent as i32
+            || completion.reason != pb::BackgroundTaskCompletionReason::TaskFinished as i32
+        {
+            continue;
+        }
+        let status = match pb::BackgroundTaskStatus::try_from(completion.status) {
+            Ok(pb::BackgroundTaskStatus::Success) => pb::SubagentRunStatus::Success,
+            Ok(pb::BackgroundTaskStatus::Error) => pb::SubagentRunStatus::Error,
+            Ok(pb::BackgroundTaskStatus::Aborted) => pb::SubagentRunStatus::Aborted,
+            _ => continue,
+        };
+        let Some(state) = completion
+            .tool_call_id
+            .as_deref()
+            .and_then(|id| base.subagent_runs_by_parent_tool_call_id.get_mut(id))
+        else {
+            continue;
+        };
+        state.status = status as i32;
+        state.completed_timestamp_ms = Some(now);
+        state.completion_reason = Some(completion.reason);
+        if let Some(agent) = completion
+            .subagent_id
+            .as_deref()
+            .and_then(|id| base.subagent_states.get_mut(id))
+        {
+            agent.last_used_timestamp_ms = now;
+        }
+    }
+}
+
+#[cfg(test)]
+mod subagent_completion_tests {
+    use super::*;
+
+    fn completion(tool_call_id: &str, status: pb::BackgroundTaskStatus) -> pb::BackgroundTaskCompletion {
+        pb::BackgroundTaskCompletion {
+            kind: pb::BackgroundTaskKind::Subagent as i32,
+            reason: pb::BackgroundTaskCompletionReason::TaskFinished as i32,
+            status: status as i32,
+            tool_call_id: Some(tool_call_id.into()),
+            subagent_id: Some("agent-1".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn finished_background_subagent_is_no_longer_reported_as_backgrounded() {
+        let mut base = pb::ConversationStateStructure::default();
+        base.subagent_runs_by_parent_tool_call_id.insert(
+            "call-1".into(),
+            pb::SubagentRunState {
+                status: pb::SubagentRunStatus::Backgrounded as i32,
+                ..Default::default()
+            },
+        );
+        base.subagent_states
+            .insert("agent-1".into(), pb::SubagentPersistedState::default());
+        let action = pb::BackgroundTaskCompletionAction {
+            completions: vec![
+                completion("call-1", pb::BackgroundTaskStatus::Success),
+                completion("unknown-call", pb::BackgroundTaskStatus::Error),
+            ],
+            ..Default::default()
+        };
+
+        apply_subagent_completions(&mut base, &action, 42);
+
+        let run = &base.subagent_runs_by_parent_tool_call_id["call-1"];
+        assert_eq!(run.status, pb::SubagentRunStatus::Success as i32);
+        assert_eq!(run.completed_timestamp_ms, Some(42));
+        assert_eq!(base.subagent_states["agent-1"].last_used_timestamp_ms, 42);
+        assert_eq!(base.subagent_runs_by_parent_tool_call_id.len(), 1);
+    }
 }

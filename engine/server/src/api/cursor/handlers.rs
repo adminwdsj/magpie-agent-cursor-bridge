@@ -261,15 +261,14 @@ async fn bidi_handler(
     } else if registry.upstream(&decoded.request_id).await {
         false
     } else {
-        trace.resume();
-        trace.request(
-            "bidi_request",
-            body.clone(),
-            trace_outcome(trace_metadata, false, "missing_transport", None),
+        // 本地 agent host 可能先发心跳或工具结果、再发带模型的 RunRequest；
+        // 追加失败后的重试也会换新的 request id。Cursor 官方流的第一条一定带模型，
+        // 所以没见过、又不带模型的流按本地处理，不再整条拒收。
+        tracing::info!(
+            request_id = decoded.request_id,
+            "routing model-less append to BYOK provider"
         );
-        return Err(crate::Error::Protocol(
-            "first BidiAppend message must select a model".into(),
-        ));
+        true
     };
     if first_model.is_some() {
         trace.begin(

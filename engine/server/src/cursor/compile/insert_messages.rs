@@ -1,7 +1,11 @@
 //! Compiles non-interrupting runtime information into append-only Messages.
 use std::collections::BTreeMap;
 
-use crate::{cursor::protocol::proto::agent::v1 as pb, Error, Result};
+use crate::{
+    cursor::{protocol::proto::agent::v1 as pb, services::blob_sync::BlobSynchronizer},
+    model::CanonicalMessage,
+    Error, Result,
+};
 
 pub(super) const FOLLOW_UP: &str = concat!(
     "Perform any necessary follow-up actions in response to the subagent completion above. ",
@@ -139,6 +143,28 @@ pub(super) fn project(
             ..Default::default()
         },
     })
+}
+
+/// 正在输出的父对话收到后台任务完成通知时，编译成和新 Run 同样的消息：
+/// 返回事件 ID、Cursor 显示的模拟用户消息、模型读到的消息。
+pub(crate) async fn compile_background_completion(
+    action: &pb::BackgroundTaskCompletionAction,
+    mode: i32,
+    request_context: &pb::RequestContext,
+    blobs: &BlobSynchronizer,
+) -> Result<(String, pb::UserMessage, CanonicalMessage)> {
+    let mut projection = project(action, mode)?;
+    let event_id = projection.turn_user.message_id.clone();
+    let (message, text) = super::break_messages::compile_background(
+        event_id.clone(),
+        &projection.turn_user,
+        request_context,
+        &projection.context,
+        blobs,
+    )
+    .await?;
+    projection.turn_user.text = text;
+    Ok((event_id, projection.turn_user, message))
 }
 
 fn status(completion: &pb::BackgroundTaskCompletion) -> Result<pb::BackgroundTaskStatus> {

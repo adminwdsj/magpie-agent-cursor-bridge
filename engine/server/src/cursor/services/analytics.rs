@@ -17,6 +17,15 @@ const AGENT_RETRIES_GATE: &str = "nal_agent_retries";
 const AGENT_WEBSOCKET_GATE: &str = "nal_websocket_client";
 const RUN_INFERENCE_WEBSOCKET_CONFIG: &str = "run_inference_websocket_client";
 const AGENT_HOST_LOCAL_LOOP_GATE: &str = "agent_host_local_loop";
+/// Cursor 只有在这三个开关都打开时，才会把后台子代理的完成通知派回父对话。
+/// 登录状态下 Cursor 服务端已经下发为开（2026-11-14 本机实测）；未登录时
+/// 服务端开关表被拒，Cursor 退回本地开关表，这里必须显式打开，否则后台子代理
+/// 跑完了父对话也不会继续。
+const BACKGROUND_TASK_GATES: [&str; 3] = [
+    "long_running_jobs",
+    "cursor_agent_host",
+    "agent_store_sync_client",
+];
 const LOCAL_RULE: &str = "local_enabled";
 
 #[derive(Clone, PartialEq, Message)]
@@ -80,6 +89,9 @@ fn local_response() -> Result<Response<Body>> {
     });
     enable_agent_retries(&mut config)?;
     disable_agent_websocket_transports(&mut config)?;
+    for gate in BACKGROUND_TASK_GATES {
+        set_gate(&mut config, gate, true)?;
+    }
     let message = BootstrapStatsigResponse {
         config: serde_json::to_string(&config)?,
         generated_at_ms,
@@ -102,7 +114,11 @@ fn local_response() -> Result<Response<Body>> {
 }
 
 fn enable_agent_retries(config: &mut Value) -> Result<()> {
-    let gate_key = statsig_key(config, AGENT_RETRIES_GATE);
+    set_gate(config, AGENT_RETRIES_GATE, true)
+}
+
+fn set_gate(config: &mut Value, name: &str, value: bool) -> Result<()> {
+    let gate_key = statsig_key(config, name);
     let root = config
         .as_object_mut()
         .ok_or_else(|| Error::Protocol("Statsig bootstrap config must be an object".into()))?;
@@ -111,7 +127,7 @@ fn enable_agent_retries(config: &mut Value) -> Result<()> {
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
         .ok_or_else(|| Error::Protocol("Statsig feature_gates must be an object".into()))?;
-    gates.insert(gate_key.clone(), enabled_gate(&gate_key, true));
+    gates.insert(gate_key.clone(), enabled_gate(&gate_key, value));
     Ok(())
 }
 
@@ -253,6 +269,20 @@ mod tests {
         });
         disable_agent_websocket_transports(&mut config).unwrap();
         assert_eq!(config["feature_gates"][key]["value"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn local_bootstrap_lets_background_subagents_wake_the_parent() {
+        let response = local_response().unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let message = BootstrapStatsigResponse::decode(body.as_ref()).unwrap();
+        let config: Value = serde_json::from_str(&message.config).unwrap();
+        for gate in BACKGROUND_TASK_GATES {
+            assert_eq!(config["feature_gates"][gate]["value"], json!(true), "{gate}");
+        }
+        assert_eq!(config["feature_gates"][AGENT_HOST_LOCAL_LOOP_GATE]["value"], json!(false));
     }
 
     #[test]

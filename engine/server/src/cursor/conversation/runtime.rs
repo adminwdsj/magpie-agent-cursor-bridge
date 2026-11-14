@@ -396,19 +396,19 @@ impl ConversationRuntime {
                                         ),
                                     ) => match conversation_action.action.clone() {
                                         Some(
-                                            pb::conversation_action::Action::UserMessageAction(
-                                                action,
-                                            ),
+                                            ref action @ (pb::conversation_action::Action::UserMessageAction(_)
+                                            | pb::conversation_action::Action::BackgroundTaskCompletionAction(_)),
                                         ) => {
+                                            // 后台子代理的完成通知和用户追加消息走同一条路：
+                                            // 父对话还在输出就注入当前轮，否则用它开新一轮。
+                                            // 以前这里直接丢弃，父对话就停在子代理后面不动了。
                                             let delivered_to_active_run =
                                                 current.as_ref().is_some_and(|generation| {
                                                     generation.run.lock().as_ref().is_some_and(
                                                         |run| run.phase() == RunPhase::Running,
                                                     ) && generation
                                                         .runtime_actions
-                                                        .send(compile::RuntimeAction::UserMessage(
-                                                            action.clone(),
-                                                        ))
+                                                        .send(active_runtime_action(action))
                                                         .is_ok()
                                                 });
                                             if delivered_to_active_run {
@@ -631,6 +631,11 @@ fn spawn_run_request(
             handle.parent().map(|parent| parent.tool_call_id.clone()),
             request.conversation_state.clone(),
         );
+        if let Some(pb::conversation_action::Action::BackgroundTaskCompletionAction(action)) =
+            request.action.as_ref().and_then(|action| action.action.as_ref())
+        {
+            checkpoint.record_subagent_completions(action);
+        }
         let prepared = tokio::select! {
             biased;
             _ = generation.superseded.cancelled() => return,
@@ -822,6 +827,18 @@ fn spawn_run_request(
                 .await;
         }
     });
+}
+
+fn active_runtime_action(action: &pb::conversation_action::Action) -> compile::RuntimeAction {
+    match action {
+        pb::conversation_action::Action::BackgroundTaskCompletionAction(action) => {
+            compile::RuntimeAction::BackgroundCompletion(action.clone())
+        }
+        pb::conversation_action::Action::UserMessageAction(action) => {
+            compile::RuntimeAction::UserMessage(action.clone())
+        }
+        _ => unreachable!("only resumable actions reach the active Run"),
+    }
 }
 
 fn runtime_action_name(action: &pb::conversation_action::Action) -> &'static str {

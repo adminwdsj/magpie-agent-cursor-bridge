@@ -14,7 +14,8 @@ use crate::{
             CheckpointBuilder,
         },
         compile::{
-            compile_injection, compile_user_message_action, CursorRunContext, RuntimeAction,
+            compile_background_completion, compile_injection, compile_user_message_action,
+            CursorRunContext, RuntimeAction,
         },
         prompting::PromptCompiler,
         protocol::events,
@@ -234,6 +235,17 @@ impl ConversationOutput {
                     }
                     RuntimeAction::UserMessage(action) => {
                         self.forward_user_message(
+                            action,
+                            active_round.as_ref(),
+                            &active_tool_calls,
+                            &completions,
+                            &mut interrupted_rounds,
+                            &mut interrupted_tool_calls,
+                        )
+                        .await?;
+                    }
+                    RuntimeAction::BackgroundCompletion(action) => {
+                        self.forward_background_completion(
                             action,
                             active_round.as_ref(),
                             &active_tool_calls,
@@ -850,6 +862,42 @@ impl ConversationOutput {
             &self.blob_sync,
         )
         .await?;
+        self.queue_injection(
+            injection_id,
+            Some(user_message),
+            message,
+            InjectionState {
+                active_round,
+                active_tool_calls,
+                completions,
+                interrupted_rounds,
+                interrupted_tool_calls,
+            },
+        )
+        .await
+    }
+
+    async fn forward_background_completion(
+        &mut self,
+        action: pb::BackgroundTaskCompletionAction,
+        active_round: Option<&ToolRoundId>,
+        active_tool_calls: &HashSet<String>,
+        completions: &HashMap<String, ToolCompletion>,
+        interrupted_rounds: &mut HashSet<ToolRoundId>,
+        interrupted_tool_calls: &mut HashSet<String>,
+    ) -> Result<()> {
+        self.checkpoint.record_subagent_completions(&action);
+        let (event_id, user_message, message) = compile_background_completion(
+            &action,
+            self.context.mode,
+            &self.context.request_context,
+            &self.blob_sync,
+        )
+        .await?;
+        let injection_id = format!("background-completion:{event_id}");
+        if self.injection_ids.contains(&injection_id) {
+            return Ok(());
+        }
         self.queue_injection(
             injection_id,
             Some(user_message),

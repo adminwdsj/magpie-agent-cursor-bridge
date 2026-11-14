@@ -43,6 +43,8 @@ pub struct CursorRunContext {
     pub checkpoint_prompt: PromptSpec,
     pub compacting: bool,
     pub background_completion: bool,
+    /// 正在输出时收到的完成通知要按发起本次 Run 的上下文编译。
+    pub request_context: pb::RequestContext,
 }
 
 pub(crate) struct PrepareDependencies<'a> {
@@ -361,6 +363,7 @@ pub(crate) async fn prepare(
             checkpoint_prompt,
             compacting,
             background_completion,
+            request_context,
         },
     ))
 }

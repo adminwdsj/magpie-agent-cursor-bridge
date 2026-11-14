@@ -51,6 +51,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", json!({"ca":state, "certificate":config::managed_data_dir()?.join("ca/ca.crt")}));
         return Ok(());
     }
+    // 诊断写 stderr，由 bridge.js 落到本机 engine-stderr.log（0600）。stdout 只给 supervisor 读就绪事件。
+    // ponytail: 默认只记 warn 且不轮转；要排查时用 RUST_LOG=cursor_server=info 临时调高。
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "cursor_server=warn".into()),
+        )
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
     let path = PathBuf::from(argument.unwrap());
     let mut contents = tokio::fs::read(&path).await?;
     let inputs = catalogue(&contents)?;
